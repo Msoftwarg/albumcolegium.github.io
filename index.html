@@ -353,6 +353,7 @@
   .sticker-card.owned { border-color: var(--gold); }
   .sticker-card.missing { opacity: 0.45; filter: grayscale(0.5); }
   .sticker-card.duplicate { border-color: var(--green); }
+  .sticker-card.pending { border-color: rgba(243,156,18,0.7); box-shadow: 0 0 0 1px rgba(243,156,18,0.12); }
   .sticker-card.selected { border-color: #3498DB; box-shadow: 0 0 0 3px rgba(52,152,219,0.3); }
 
   .sticker-photo {
@@ -378,6 +379,21 @@
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .sticker-pending {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 18px;
+    background: linear-gradient(180deg, rgba(10,22,40,0.72), rgba(10,22,40,0.96));
+    color: var(--orange);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: 1.5px;
   }
   .sticker-number {
     position: absolute;
@@ -406,6 +422,7 @@
   }
   .sticker-badge.dup { background: var(--orange); }
   .sticker-badge.missing-badge { background: rgba(0,0,0,0.5); color: rgba(255,255,255,0.4); }
+  .sticker-badge.pending-badge { background: rgba(243,156,18,0.18); color: var(--orange); }
 
   .sticker-info {
     padding: 10px 10px 12px;
@@ -609,6 +626,7 @@
   .btn-secondary { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.12); }
   .btn-codes.active { background: var(--gold); color: var(--navy); border-color: var(--gold); }
   .btn-full { width: 100%; text-align: center; padding: 12px; font-size: 14px; margin-top: 8px; }
+  .btn-small { padding: 7px 10px; font-size: 11px; }
 
   .trade-status {
     display: inline-block;
@@ -861,6 +879,17 @@
     color: rgba(255,255,255,0.46);
     margin-top: 4px;
   }
+  .codes-card-header {
+    padding: 18px 18px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .codes-panel-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 24px;
+    color: var(--gold);
+    letter-spacing: 1.5px;
+    line-height: 1;
+  }
   .codes-card {
     background: var(--navy-mid);
     border: 1px solid rgba(255,255,255,0.08);
@@ -874,7 +903,10 @@
   .codes-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 560px;
+    min-width: 420px;
+  }
+  .codes-table.pending-table {
+    min-width: 680px;
   }
   .codes-table thead th {
     text-align: left;
@@ -895,9 +927,6 @@
   .codes-table tbody tr:hover {
     background: rgba(255,255,255,0.03);
   }
-  .codes-table tbody tr.is-expired {
-    background: rgba(231,76,60,0.05);
-  }
   .codes-name {
     font-weight: 800;
   }
@@ -907,21 +936,10 @@
     letter-spacing: 1px;
     color: var(--gold);
   }
-  .codes-usage,
-  .codes-usage-head {
-    text-align: center;
-    white-space: nowrap;
-  }
-  .codes-usage {
-    font-family: 'Courier New', monospace;
-    font-size: 13px;
-    letter-spacing: 1px;
-    color: rgba(255,255,255,0.9);
-    font-weight: 700;
-  }
-  .codes-table tbody tr.is-expired .codes-secret,
-  .codes-table tbody tr.is-expired .codes-usage {
-    color: #ff8d8d;
+  .codes-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   .codes-empty {
     padding: 28px;
@@ -1085,7 +1103,7 @@
       <div class="section-header" style="margin-bottom:0;">
         <div>
           <div class="section-title">🔐 Códigos Secretos</div>
-          <div class="codes-subtitle">Vista oculta protegida por clave. Muestra nombre, código y usos restantes por figurita.</div>
+          <div class="codes-subtitle">Vista oculta protegida por clave. Muestra nombre y código por figurita.</div>
         </div>
       </div>
       <div class="codes-card">
@@ -1095,10 +1113,28 @@
               <tr>
                 <th>Figurita</th>
                 <th>Código</th>
-                <th class="codes-usage-head">Usos</th>
               </tr>
             </thead>
             <tbody id="codes-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="codes-card">
+        <div class="codes-card-header">
+          <div class="codes-panel-title">🕓 Pendientes de validación</div>
+          <div class="codes-subtitle">Aprobá la figurita para que se agregue al álbum del usuario.</div>
+        </div>
+        <div class="codes-table-wrap">
+          <table class="codes-table pending-table">
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Figurita</th>
+                <th>Solicitado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="pending-validations-table-body"></tbody>
           </table>
         </div>
       </div>
@@ -1154,7 +1190,7 @@
         <div class="code-target-emoji">🔒</div>
         <div class="code-target-info">
           <div class="code-target-name">Selecciona una figurita</div>
-          <div class="code-target-meta">Ingresá su código secreto</div>
+          <div class="code-target-meta">Quedará pendiente de validación</div>
         </div>
       </div>
     </div>

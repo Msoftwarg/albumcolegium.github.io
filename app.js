@@ -63,6 +63,9 @@ let codesAccessGranted = false;
 let secretCodesRows = [];
 let secretCodesLoaded = false;
 let secretCodesLoading = false;
+let pendingValidationRows = [];
+let pendingValidationLoaded = false;
+let pendingValidationLoading = false;
 let toastTimeout = null;
 
 function createEmptyApp() {
@@ -70,6 +73,7 @@ function createEmptyApp() {
     usuarios: [],
     figuritas: [],
     usuarioFiguritas: [],
+    validacionesSecretas: [],
     intercambios: [],
     intercambioItems: [],
     mensajes: [],
@@ -77,6 +81,8 @@ function createEmptyApp() {
     usuariosById: new Map(),
     figuritasById: new Map(),
     ownedByUser: {},
+    pendingByUser: {},
+    validacionesSecretasById: new Map(),
     tradeItemsByTrade: new Map(),
     stickers: [],
   };
@@ -146,16 +152,6 @@ function normalizeStickerCode(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
-function normalizeCodeUsage(row) {
-  const totalValue = Number(row?.secret_code_uses_total ?? row?.usos_total ?? 1);
-  const total = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 1;
-  const remainingValue = Number(row?.secret_code_uses_remaining ?? row?.usos_restantes ?? total);
-  const remaining = Number.isFinite(remainingValue)
-    ? Math.max(0, Math.min(remainingValue, total))
-    : total;
-  return { total, remaining };
-}
-
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -201,6 +197,10 @@ function getOwnedMap(userId) {
   return APP.ownedByUser[userId] || {};
 }
 
+function getPendingValidation(userId, figuritaId) {
+  return APP.pendingByUser?.[Number(userId)]?.[Number(figuritaId)] || null;
+}
+
 function getStickerById(id) {
   return APP.figuritasById.get(Number(id)) || null;
 }
@@ -223,8 +223,6 @@ function buildFallbackData() {
     user_id: user.id,
     foto_path: '',
     secret_code: generateDemoSecretCode(user.id * 997),
-    secret_code_uses_total: 1 + Math.floor(seededFraction(user.id * 73) * 4),
-    secret_code_uses_remaining: 1 + Math.floor(seededFraction(user.id * 73) * 4),
   }));
 
   const usuarioFiguritas = [];
@@ -253,6 +251,7 @@ function buildFallbackData() {
     usuarios,
     figuritas,
     usuarioFiguritas,
+    validacionesSecretas: [],
     intercambios: [],
     intercambioItems: [],
     mensajes: [],
@@ -282,8 +281,6 @@ async function loadRemoteData() {
       user_id: Number(user.id),
       foto_path: stripDiacritics(user.lamina_path || ''),
       secret_code: generateDemoSecretCode(user.id * 997),
-      secret_code_uses_total: 1 + Math.floor(seededFraction(user.id * 73) * 4),
-      secret_code_uses_remaining: 1 + Math.floor(seededFraction(user.id * 73) * 4),
     }));
   }
 
@@ -298,12 +295,14 @@ async function loadRemoteData() {
 
   const [
     usuarioFiguritas,
+    validacionesSecretas,
     intercambios,
     intercambioItems,
     mensajes,
     comentarios,
   ] = await Promise.all([
     loadOrEmpty('usuario_figuritas', 'created_at'),
+    loadOrEmpty('validaciones_secretas', 'created_at'),
     loadOrEmpty('intercambios', 'created_at'),
     loadOrEmpty('intercambio_items', 'id'),
     loadOrEmpty('mensajes', 'created_at'),
@@ -314,6 +313,7 @@ async function loadRemoteData() {
     usuarios,
     figuritas,
     usuarioFiguritas,
+    validacionesSecretas,
     intercambios,
     intercambioItems,
     mensajes,
@@ -321,6 +321,8 @@ async function loadRemoteData() {
     usuariosById: new Map(),
     figuritasById: new Map(),
     ownedByUser: {},
+    pendingByUser: {},
+    validacionesSecretasById: new Map(),
     tradeItemsByTrade: new Map(),
     stickers: [],
   };
@@ -341,10 +343,19 @@ function rebuildDerivedData() {
       ...figurita,
       foto_path: stripDiacritics(figurita.foto_path || ''),
       secret_code: figurita.secret_code || '',
-      ...normalizeCodeUsage(figurita),
     }))
     .sort(sortByIdAscending);
   APP.usuarioFiguritas = [...APP.usuarioFiguritas];
+  APP.validacionesSecretas = [...APP.validacionesSecretas]
+    .map(row => ({
+      ...row,
+      id: Number(row.id),
+      user_id: Number(row.user_id),
+      figurita_id: Number(row.figurita_id),
+      responded_by_user_id: row.responded_by_user_id == null ? null : Number(row.responded_by_user_id),
+      status: row.status || 'pending',
+    }))
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   APP.intercambios = [...APP.intercambios].sort(sortByCreatedAtDesc);
   APP.intercambioItems = [...APP.intercambioItems];
   APP.mensajes = [...APP.mensajes].sort(sortByCreatedAtDesc);
@@ -370,8 +381,6 @@ function rebuildDerivedData() {
       user_id: Number(f.user_id),
       foto_path: fotoPath,
       secret_code: f.secret_code || '',
-      secret_code_uses_total: normalizeCodeUsage(f).total,
-      secret_code_uses_remaining: normalizeCodeUsage(f).remaining,
       lamina_path: user?.lamina_path || '',
       user,
       name: user?.name || `Usuario ${f.user_id}`,
@@ -380,6 +389,8 @@ function rebuildDerivedData() {
     return [enriched.id, enriched];
   }));
 
+  APP.validacionesSecretasById = new Map(APP.validacionesSecretas.map(row => [row.id, row]));
+
   APP.ownedByUser = {};
   APP.usuarioFiguritas.forEach(row => {
     const userId = Number(row.user_id);
@@ -387,6 +398,13 @@ function rebuildDerivedData() {
     const cantidad = Number(row.cantidad) || 0;
     if (!APP.ownedByUser[userId]) APP.ownedByUser[userId] = {};
     if (cantidad > 0) APP.ownedByUser[userId][figuritaId] = cantidad;
+  });
+
+  APP.pendingByUser = {};
+  APP.validacionesSecretas.forEach(row => {
+    if (row.status !== 'pending') return;
+    if (!APP.pendingByUser[row.user_id]) APP.pendingByUser[row.user_id] = {};
+    APP.pendingByUser[row.user_id][row.figurita_id] = row;
   });
 
   APP.tradeItemsByTrade = new Map();
@@ -416,14 +434,11 @@ function rebuildDerivedData() {
   APP.stickers = APP.figuritas.map(figurita => {
     const user = APP.usuariosById.get(Number(figurita.user_id));
     const fotoPath = figurita.foto_path || user?.lamina_path || '';
-    const usage = normalizeCodeUsage(figurita);
     return {
       id: Number(figurita.id),
       user_id: Number(figurita.user_id),
       foto_path: fotoPath,
       secret_code: figurita.secret_code || '',
-      secret_code_uses_total: usage.total,
-      secret_code_uses_remaining: usage.remaining,
       lamina_path: user?.lamina_path || '',
       user,
       name: user?.name || `Usuario ${figurita.user_id}`,
@@ -984,15 +999,21 @@ function renderStickerGrid(containerId, filter, userId) {
     return;
   }
 
-  container.innerHTML = filtered.map(sticker => stickerHTML(sticker, owned[sticker.id] || 0)).join('');
+  container.innerHTML = filtered.map(sticker => stickerHTML(sticker, owned[sticker.id] || 0, userId)).join('');
 }
 
-function stickerHTML(sticker, qty) {
+function stickerHTML(sticker, qty, userId) {
   let stateClass = '';
   let badgeHTML = '';
+  const pendingValidation = userId ? getPendingValidation(userId, sticker.id) : null;
   if (qty === 0) {
-    stateClass = 'missing';
-    badgeHTML = '<div class="sticker-badge missing-badge">Falta</div>';
+    if (pendingValidation) {
+      stateClass = 'pending';
+      badgeHTML = '<div class="sticker-badge pending-badge">Pendiente</div>';
+    } else {
+      stateClass = 'missing';
+      badgeHTML = '<div class="sticker-badge missing-badge">Falta</div>';
+    }
   } else if (qty === 1) {
     stateClass = 'owned';
     badgeHTML = '<div class="sticker-badge">✓</div>';
@@ -1005,10 +1026,15 @@ function stickerHTML(sticker, qty) {
   const imagePath = qty > 0 ? (sticker.foto_path || sticker.lamina_path || '') : '';
   const imageHTML = imagePath
     ? `<img class="sticker-image" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">`
-    : `<div class="sticker-avatar" style="background:${bg}; color:rgba(255,255,255,0.9);">${escapeHtml(sticker.initials)}</div>`;
+    : pendingValidation
+      ? `<div class="sticker-pending" style="background:${bg}; color:rgba(255,255,255,0.95);">Pendiente de validaci&oacute;n</div>`
+      : `<div class="sticker-avatar" style="background:${bg}; color:rgba(255,255,255,0.9);">${escapeHtml(sticker.initials)}</div>`;
+  const title = pendingValidation
+    ? 'Pendiente de validación'
+    : 'Click para activar con código secreto';
 
   return `
-    <div class="sticker-card ${stateClass}" onclick="toggleOwn(${sticker.id})" title="Click para activar con código secreto">
+    <div class="sticker-card ${stateClass}" onclick="toggleOwn(${sticker.id})" title="${escapeAttr(title)}">
       <div class="sticker-photo">
         ${imageHTML}
         <div class="sticker-number">#${String(sticker.id).padStart(2, '0')}</div>
@@ -1022,6 +1048,11 @@ function stickerHTML(sticker, qty) {
 }
 
 function toggleOwn(stickerId) {
+  const pendingValidation = currentUserId ? getPendingValidation(currentUserId, stickerId) : null;
+  if (pendingValidation) {
+    showToast('Pendiente de validación');
+    return;
+  }
   openStickerCodeModal(stickerId);
 }
 
@@ -1049,6 +1080,7 @@ function openStickerCodeModal(stickerId) {
       <div class="code-target-emoji" style="background:${bg}; color:rgba(255,255,255,0.95);">${escapeHtml(sticker?.initials || '🔒')}</div>
       <div class="code-target-info">
         <div class="code-target-name">#${String(stickerId).padStart(2, '0')} ${escapeHtml(sticker?.name || 'Figurita')}</div>
+        <div class="code-target-meta">Quedará pendiente de validación</div>
       </div>
     `;
   }
@@ -1080,23 +1112,27 @@ function demoActivateStickerWithCode(userId, stickerId, code) {
     throw new Error('codigo incorrecto');
   }
 
-  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(stickerId));
-  const usage = normalizeCodeUsage(rawSticker || sticker);
-  if (usage.remaining <= 0) {
-    throw new Error('codigo agotado');
+  if (getOwnedMap(userId)[Number(stickerId)] > 0) {
+    throw new Error('figurita ya activada');
   }
 
-  const current = getLocalQty(userId, stickerId);
-  setLocalStickerQty(userId, stickerId, current + 1);
-
-  if (rawSticker && !rawSticker.foto_path) {
-    rawSticker.foto_path = sticker.lamina_path || '';
-  }
-  if (rawSticker) {
-    rawSticker.secret_code_uses_remaining = Math.max(0, usage.remaining - 1);
+  const existingPending = getPendingValidation(userId, stickerId);
+  if (existingPending) {
+    throw new Error('ya pendiente');
   }
 
-  return 'activated';
+  const validation = {
+    id: Date.now(),
+    user_id: Number(userId),
+    figurita_id: Number(stickerId),
+    status: 'pending',
+    created_at: new Date().toISOString(),
+    responded_at: null,
+    responded_by_user_id: null,
+  };
+  APP.validacionesSecretas.unshift(validation);
+
+  return 'pending';
 }
 
 async function submitStickerCode() {
@@ -1127,27 +1163,31 @@ async function submitStickerCode() {
       if (error) throw error;
       secretCodesRows = [];
       secretCodesLoaded = false;
+      pendingValidationLoaded = false;
       await reloadFromSource();
     } else {
       demoActivateStickerWithCode(currentUserId, pendingStickerId, code);
       secretCodesRows = [];
       secretCodesLoaded = false;
+      pendingValidationLoaded = false;
       rebuildDerivedData();
       renderAll();
     }
     closeStickerCodeModal();
-    showToast('✅ Figurita activada');
+    showToast('✅ Solicitud enviada a validación');
   } catch (error) {
     console.error(error);
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('codigo incorrecto')) {
       setStickerCodeError('Código incorrecto.');
-    } else if (msg.includes('codigo agotado')) {
-      setStickerCodeError('Este código ya no tiene usos disponibles.');
+    } else if (msg.includes('figurita ya activada')) {
+      setStickerCodeError('Esa figurita ya está en tu álbum.');
+    } else if (msg.includes('ya pendiente')) {
+      setStickerCodeError('Ya hay una solicitud pendiente para esa figurita.');
     } else if (msg.includes('figurita no encontrada')) {
       setStickerCodeError('Figurita no encontrada.');
     } else {
-      setStickerCodeError('No se pudo validar el código.');
+      setStickerCodeError('No se pudo enviar la solicitud.');
     }
   }
 }
@@ -1557,23 +1597,19 @@ function renderCodesTableRows() {
   if (!body) return;
 
   if (!codesAccessGranted) {
-    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">Vista bloqueada.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">Vista bloqueada.</div></td></tr>';
     return;
   }
 
   if (!secretCodesRows.length) {
-    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">No hay códigos para mostrar.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">No hay códigos para mostrar.</div></td></tr>';
     return;
   }
 
   body.innerHTML = secretCodesRows.map(row => `
-    <tr class="${normalizeCodeUsage(row).remaining <= 0 ? 'is-expired' : ''}">
+    <tr>
       <td class="codes-name">${escapeHtml(row.nombre || '')}</td>
       <td class="codes-secret">${escapeHtml(row.secret_code || '')}</td>
-      <td class="codes-usage">${(() => {
-        const usage = normalizeCodeUsage(row);
-        return `${usage.remaining}/${usage.total}`;
-      })()}</td>
     </tr>
   `).join('');
 }
@@ -1589,10 +1625,16 @@ async function loadCodesRows() {
     for (const viewName of remoteViews) {
       const { data, error } = await supabaseClient
         .from(viewName)
-        .select('*')
+        .select('figurita_id,nombre,secret_code')
         .order('figurita_id', { ascending: true });
 
-      if (!error) return data || [];
+      if (!error) {
+        return (data || []).map(row => ({
+          figurita_id: Number(row.figurita_id),
+          nombre: row.nombre || '',
+          secret_code: row.secret_code || '',
+        }));
+      }
 
       lastError = error;
       if (error.code !== 'PGRST205') break;
@@ -1603,13 +1645,10 @@ async function loadCodesRows() {
 
   return APP.figuritas.map(figurita => {
     const user = APP.usuariosById.get(Number(figurita.user_id));
-    const usage = normalizeCodeUsage(figurita);
     return {
       figurita_id: Number(figurita.id),
       nombre: user?.name || `Usuario ${figurita.user_id}`,
       secret_code: figurita.secret_code || '',
-      secret_code_uses_total: usage.total,
-      secret_code_uses_remaining: usage.remaining,
     };
   }).sort((a, b) => Number(a.figurita_id) - Number(b.figurita_id));
 }
@@ -1626,7 +1665,7 @@ async function refreshCodesRows() {
   if (secretCodesLoading) return;
 
   secretCodesLoading = true;
-  body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">Cargando códigos...</div></td></tr>';
+  body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">Cargando códigos...</div></td></tr>';
 
   try {
     secretCodesRows = await loadCodesRows();
@@ -1634,27 +1673,185 @@ async function refreshCodesRows() {
     renderCodesTableRows();
   } catch (error) {
     console.error(error);
-    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">No se pudieron cargar los códigos.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">No se pudieron cargar los códigos.</div></td></tr>';
   } finally {
     secretCodesLoading = false;
   }
 }
 
-function renderCodesView() {
-  const body = document.getElementById('codes-table-body');
+function renderPendingValidationsRows() {
+  const body = document.getElementById('pending-validations-table-body');
   if (!body) return;
 
   if (!codesAccessGranted) {
+    body.innerHTML = '<tr><td colspan="4"><div class="codes-empty">Vista bloqueada.</div></td></tr>';
+    return;
+  }
+
+  if (!pendingValidationRows.length) {
+    body.innerHTML = '<tr><td colspan="4"><div class="codes-empty">No hay solicitudes pendientes.</div></td></tr>';
+    return;
+  }
+
+  body.innerHTML = pendingValidationRows.map(row => {
+    const user = getUserById(row.user_id);
+    const sticker = getStickerById(row.figurita_id);
+    const createdAt = formatDateTime(row.created_at);
+    return `
+      <tr>
+        <td class="codes-name">${escapeHtml(user?.name || `Usuario ${row.user_id}`)}</td>
+        <td class="codes-name">${escapeHtml(sticker?.name || `Figurita ${row.figurita_id}`)}</td>
+        <td class="codes-secret">${escapeHtml(createdAt)}</td>
+        <td class="codes-actions">
+          <button class="btn btn-accept btn-small" onclick="approvePendingValidation(${row.id})">Aprobar</button>
+          <button class="btn btn-reject btn-small" onclick="rejectPendingValidation(${row.id})">Rechazar</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadPendingValidationRows() {
+  if (!currentUserId || !codesAccessGranted) return [];
+
+  if (usingRemoteDb()) {
+    const { data, error } = await supabaseClient
+      .from('validaciones_secretas')
+      .select('id,user_id,figurita_id,status,created_at,responded_at,responded_by_user_id')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return (data || []).map(row => ({
+      id: Number(row.id),
+      user_id: Number(row.user_id),
+      figurita_id: Number(row.figurita_id),
+      status: row.status || 'pending',
+      created_at: row.created_at || new Date().toISOString(),
+      responded_at: row.responded_at || null,
+      responded_by_user_id: row.responded_by_user_id == null ? null : Number(row.responded_by_user_id),
+    }));
+  }
+
+  return APP.validacionesSecretas
+    .filter(row => row.status === 'pending')
+    .map(row => ({
+      id: Number(row.id),
+      user_id: Number(row.user_id),
+      figurita_id: Number(row.figurita_id),
+      status: row.status || 'pending',
+      created_at: row.created_at || new Date().toISOString(),
+      responded_at: row.responded_at || null,
+      responded_by_user_id: row.responded_by_user_id == null ? null : Number(row.responded_by_user_id),
+    }))
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+}
+
+async function refreshPendingValidationRows() {
+  const body = document.getElementById('pending-validations-table-body');
+  if (!body) return;
+
+  if (!codesAccessGranted) {
+    renderPendingValidationsRows();
+    return;
+  }
+
+  if (pendingValidationLoading) return;
+
+  pendingValidationLoading = true;
+  body.innerHTML = '<tr><td colspan="4"><div class="codes-empty">Cargando solicitudes...</div></td></tr>';
+
+  try {
+    pendingValidationRows = await loadPendingValidationRows();
+    pendingValidationLoaded = true;
+    renderPendingValidationsRows();
+  } catch (error) {
+    console.error(error);
+    body.innerHTML = '<tr><td colspan="4"><div class="codes-empty">No se pudieron cargar las solicitudes.</div></td></tr>';
+  } finally {
+    pendingValidationLoading = false;
+  }
+}
+
+function renderCodesView() {
+  const codesBody = document.getElementById('codes-table-body');
+  const pendingBody = document.getElementById('pending-validations-table-body');
+  if (!codesBody && !pendingBody) return;
+
+  if (!codesAccessGranted) {
     renderCodesTableRows();
+    renderPendingValidationsRows();
     return;
   }
 
   if (!secretCodesLoaded) {
     void refreshCodesRows();
+  } else {
+    renderCodesTableRows();
+  }
+
+  if (!pendingValidationLoaded) {
+    void refreshPendingValidationRows();
+  } else {
+    renderPendingValidationsRows();
+  }
+}
+
+async function approvePendingValidation(validationId) {
+  if (!currentUserId) {
+    showAuthScreen();
     return;
   }
 
-  renderCodesTableRows();
+  try {
+    if (usingRemoteDb()) {
+      const { error } = await supabaseClient.rpc('aprobar_validacion_secreta', {
+        p_validacion_id: validationId,
+        p_approved_by_user_id: currentUserId,
+      });
+      if (error) throw error;
+      pendingValidationLoaded = false;
+      await reloadFromSource();
+    } else {
+      demoApproveValidation(validationId, currentUserId);
+      pendingValidationLoaded = false;
+      rebuildDerivedData();
+      renderAll();
+    }
+
+    showToast('✅ Figurita aprobada');
+  } catch (error) {
+    console.error(error);
+    showToast('No se pudo aprobar la solicitud');
+  }
+}
+
+async function rejectPendingValidation(validationId) {
+  if (!currentUserId) {
+    showAuthScreen();
+    return;
+  }
+
+  try {
+    if (usingRemoteDb()) {
+      const { error } = await supabaseClient.rpc('rechazar_validacion_secreta', {
+        p_validacion_id: validationId,
+        p_approved_by_user_id: currentUserId,
+      });
+      if (error) throw error;
+      pendingValidationLoaded = false;
+      await reloadFromSource();
+    } else {
+      demoRejectValidation(validationId, currentUserId);
+      pendingValidationLoaded = false;
+      rebuildDerivedData();
+      renderAll();
+    }
+
+    showToast('❌ Solicitud rechazada');
+  } catch (error) {
+    console.error(error);
+    showToast('No se pudo rechazar la solicitud');
+  }
 }
 
 async function markMessagesAsRead(userId) {
@@ -1773,6 +1970,39 @@ function demoRespondTrade(tradeId, response) {
 
   trade.status = response;
   trade.responded_at = new Date().toISOString();
+}
+
+function demoApproveValidation(validationId, approvedByUserId) {
+  const validation = APP.validacionesSecretas.find(item => Number(item.id) === Number(validationId));
+  if (!validation) throw new Error('validacion no encontrada');
+  if (validation.status !== 'pending') throw new Error('validacion ya procesada');
+
+  const sticker = getStickerById(validation.figurita_id);
+  if (!sticker) throw new Error('figurita no encontrada');
+
+  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(validation.figurita_id));
+  const currentQty = getLocalQty(validation.user_id, validation.figurita_id);
+  if (currentQty <= 0) {
+    setLocalStickerQty(validation.user_id, validation.figurita_id, 1);
+  }
+
+  if (rawSticker && !rawSticker.foto_path) {
+    rawSticker.foto_path = sticker.lamina_path || '';
+  }
+
+  validation.status = 'accepted';
+  validation.responded_at = new Date().toISOString();
+  validation.responded_by_user_id = approvedByUserId == null ? null : Number(approvedByUserId);
+}
+
+function demoRejectValidation(validationId, approvedByUserId) {
+  const validation = APP.validacionesSecretas.find(item => Number(item.id) === Number(validationId));
+  if (!validation) throw new Error('validacion no encontrada');
+  if (validation.status !== 'pending') throw new Error('validacion ya procesada');
+
+  validation.status = 'rejected';
+  validation.responded_at = new Date().toISOString();
+  validation.responded_by_user_id = approvedByUserId == null ? null : Number(approvedByUserId);
 }
 
 function demoCreateMessage(fromUserId, toUserId, body) {
