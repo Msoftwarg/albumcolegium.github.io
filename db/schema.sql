@@ -75,6 +75,9 @@ $$;
 alter table public.figuritas
   add column if not exists secret_code text;
 
+drop view if exists public.codigos_sectretos;
+drop view if exists public.codigos_secretos;
+
 alter table public.figuritas
   drop column if exists secret_code_uses_total,
   drop column if exists secret_code_uses_remaining;
@@ -293,7 +296,6 @@ set search_path = public
 as $$
 declare
   v_secret text;
-  v_has_active boolean;
   v_has_pending boolean;
 begin
   select f.secret_code
@@ -308,19 +310,6 @@ begin
   if upper(regexp_replace(coalesce(v_secret, ''), '[^A-Za-z0-9]', '', 'g')) <>
      upper(regexp_replace(coalesce(p_codigo, ''), '[^A-Za-z0-9]', '', 'g')) then
     raise exception 'codigo incorrecto';
-  end if;
-
-  select exists(
-    select 1
-    from public.usuario_figuritas
-    where user_id = p_user_id
-      and figurita_id = p_figurita_id
-      and cantidad > 0
-  )
-  into v_has_active;
-
-  if v_has_active then
-    raise exception 'figurita ya activada';
   end if;
 
   select exists(
@@ -396,7 +385,7 @@ begin
   values (v_validacion.user_id, v_validacion.figurita_id, 1, now())
   on conflict (user_id, figurita_id)
   do update set
-    cantidad = greatest(uf.cantidad, excluded.cantidad),
+    cantidad = uf.cantidad + excluded.cantidad,
     created_at = now();
 
   update public.validaciones_secretas

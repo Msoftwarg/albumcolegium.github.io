@@ -1112,10 +1112,6 @@ function demoActivateStickerWithCode(userId, stickerId, code) {
     throw new Error('codigo incorrecto');
   }
 
-  if (getOwnedMap(userId)[Number(stickerId)] > 0) {
-    throw new Error('figurita ya activada');
-  }
-
   const existingPending = getPendingValidation(userId, stickerId);
   if (existingPending) {
     throw new Error('ya pendiente');
@@ -1180,8 +1176,6 @@ async function submitStickerCode() {
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('codigo incorrecto')) {
       setStickerCodeError('Código incorrecto.');
-    } else if (msg.includes('figurita ya activada')) {
-      setStickerCodeError('Esa figurita ya está en tu álbum.');
     } else if (msg.includes('ya pendiente')) {
       setStickerCodeError('Ya hay una solicitud pendiente para esa figurita.');
     } else if (msg.includes('figurita no encontrada')) {
@@ -1982,9 +1976,7 @@ function demoApproveValidation(validationId, approvedByUserId) {
 
   const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(validation.figurita_id));
   const currentQty = getLocalQty(validation.user_id, validation.figurita_id);
-  if (currentQty <= 0) {
-    setLocalStickerQty(validation.user_id, validation.figurita_id, 1);
-  }
+  setLocalStickerQty(validation.user_id, validation.figurita_id, currentQty + 1);
 
   if (rawSticker && !rawSticker.foto_path) {
     rawSticker.foto_path = sticker.lamina_path || '';
