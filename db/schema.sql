@@ -75,9 +75,24 @@ $$;
 alter table public.figuritas
   add column if not exists secret_code text;
 
+alter table public.figuritas
+  add column if not exists secret_code_uses_total integer not null default 1 check (secret_code_uses_total >= 1),
+  add column if not exists secret_code_uses_remaining integer not null default 1 check (secret_code_uses_remaining >= 0);
+
 update public.figuritas
-set secret_code = coalesce(secret_code, public.generate_secret_code())
-where secret_code is null;
+set
+  secret_code = coalesce(nullif(secret_code, ''), public.generate_secret_code()),
+  secret_code_uses_total = greatest(coalesce(secret_code_uses_total, 1), 1),
+  secret_code_uses_remaining = case
+    when secret_code_uses_remaining is null then greatest(coalesce(secret_code_uses_total, 1), 1)
+    when secret_code_uses_remaining < 0 then 0
+    else secret_code_uses_remaining
+  end
+where true;
+
+update public.figuritas
+set secret_code_uses_remaining = least(secret_code_uses_remaining, secret_code_uses_total)
+where true;
 
 update public.figuritas
 set foto_path = public.strip_diacritics(coalesce(nullif(foto_path, ''), ''))
@@ -90,11 +105,57 @@ alter table public.figuritas
 create unique index if not exists idx_figuritas_secret_code
   on public.figuritas (secret_code);
 
+create or replace function public.configurar_codigo_secreto(
+  p_figurita_id bigint,
+  p_secret_code text default null,
+  p_uses_total integer default 1
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_secret_code text;
+  v_uses_total integer;
+begin
+  v_uses_total := coalesce(p_uses_total, 1);
+
+  if v_uses_total < 1 then
+    raise exception 'usos invalidos';
+  end if;
+
+  select coalesce(nullif(secret_code, ''), public.generate_secret_code())
+  into v_secret_code
+  from public.figuritas
+  where id = p_figurita_id;
+
+  if not found then
+    raise exception 'figurita no encontrada';
+  end if;
+
+  if trim(coalesce(p_secret_code, '')) <> '' then
+    v_secret_code := trim(public.strip_diacritics(p_secret_code));
+    if v_secret_code = '' then
+      v_secret_code := public.generate_secret_code();
+    end if;
+  end if;
+
+  update public.figuritas
+  set secret_code = v_secret_code,
+      secret_code_uses_total = v_uses_total,
+      secret_code_uses_remaining = v_uses_total
+  where id = p_figurita_id;
+end;
+$$;
+
 create or replace view public.codigos_secretos as
 select
   f.id as figurita_id,
   public.strip_diacritics(u.name) as nombre,
-  f.secret_code
+  f.secret_code,
+  f.secret_code_uses_total,
+  f.secret_code_uses_remaining
 from public.figuritas f
 join public.usuarios u on u.id = f.user_id;
 
@@ -233,12 +294,15 @@ as $$
 declare
   v_secret text;
   v_lamina_path text;
+  v_uses_remaining integer;
+  v_next_uses_remaining integer;
 begin
-  select f.secret_code, coalesce(u.lamina_path, '')
-  into v_secret, v_lamina_path
+  select f.secret_code, f.secret_code_uses_remaining, coalesce(u.lamina_path, '')
+  into v_secret, v_uses_remaining, v_lamina_path
   from public.figuritas f
   join public.usuarios u on u.id = f.user_id
-  where f.id = p_figurita_id;
+  where f.id = p_figurita_id
+  for update;
 
   if not found then
     raise exception 'figurita no encontrada';
@@ -249,9 +313,19 @@ begin
     raise exception 'codigo incorrecto';
   end if;
 
+  if coalesce(v_uses_remaining, 0) <= 0 then
+    raise exception 'codigo agotado';
+  end if;
+
   if coalesce(v_lamina_path, '') <> '' then
+    v_next_uses_remaining := greatest(coalesce(v_uses_remaining, 0) - 1, 0);
     update public.figuritas
-    set foto_path = coalesce(nullif(foto_path, ''), public.strip_diacritics(v_lamina_path))
+    set foto_path = coalesce(nullif(foto_path, ''), public.strip_diacritics(v_lamina_path)),
+        secret_code_uses_remaining = v_next_uses_remaining
+    where id = p_figurita_id;
+  else
+    update public.figuritas
+    set secret_code_uses_remaining = greatest(coalesce(v_uses_remaining, 0) - 1, 0)
     where id = p_figurita_id;
   end if;
 

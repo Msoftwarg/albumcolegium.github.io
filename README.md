@@ -21,16 +21,24 @@
 Los usuarios quedan autenticados con `login_name` y `login_password`. En el seed generado desde `laminas/*.png`, ambos salen del nombre del archivo sin `.png` ni tildes, y `lamina_path` apunta a la imagen real.
 La tabla `usuarios` ya no usa `role` ni `pais_id`: ahora solo guarda `name`, `login_name`, `login_password` y `lamina_path`.
 
-Cuando se activa una figurita, la función `activar_figurita_con_codigo` copia esa ruta a `figuritas.foto_path` si todavía estaba vacía. La tarjeta solo muestra la imagen cuando la figurita tiene cantidad activa; si no, conserva las iniciales.
+Cuando se activa una figurita, la función `activar_figurita_con_codigo` copia esa ruta a `figuritas.foto_path` si todavía estaba vacía y descuenta un uso del código. Cuando `secret_code_uses_remaining` llega a `0`, ese código deja de ser válido para esa figurita. La tarjeta solo muestra la imagen cuando la figurita tiene cantidad activa; si no, conserva las iniciales.
 
 Si necesitás ver los códigos secretos generados por la DB, corré en el SQL Editor:
 
 ```sql
-select id, secret_code
-from public.figuritas
-order by id;
+select figurita_id, nombre, secret_code, secret_code_uses_total, secret_code_uses_remaining
+from public.codigos_secretos
+order by figurita_id;
 ```
 
-La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible.
+Para configurar un código y su cupo de usos desde backend:
+
+```sql
+select public.configurar_codigo_secreto(42, 'MI-CODIGO', 5);
+```
+
+Si dejás el código vacío, la función conserva el código actual de esa figurita y solo reinicia el cupo de usos.
+
+La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible. La vista ahora muestra nombre, código y usos restantes por figurita.
 
 Con eso, `usuarios`, `figuritas`, `usuario_figuritas`, `intercambios`, `mensajes` y `comentarios` quedan sincronizados entre usuarios.

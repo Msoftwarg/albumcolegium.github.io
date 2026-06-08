@@ -146,6 +146,16 @@ function normalizeStickerCode(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+function normalizeCodeUsage(row) {
+  const totalValue = Number(row?.secret_code_uses_total ?? row?.usos_total ?? 1);
+  const total = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 1;
+  const remainingValue = Number(row?.secret_code_uses_remaining ?? row?.usos_restantes ?? total);
+  const remaining = Number.isFinite(remainingValue)
+    ? Math.max(0, Math.min(remainingValue, total))
+    : total;
+  return { total, remaining };
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -213,6 +223,8 @@ function buildFallbackData() {
     user_id: user.id,
     foto_path: '',
     secret_code: generateDemoSecretCode(user.id * 997),
+    secret_code_uses_total: 1 + Math.floor(seededFraction(user.id * 73) * 4),
+    secret_code_uses_remaining: 1 + Math.floor(seededFraction(user.id * 73) * 4),
   }));
 
   const usuarioFiguritas = [];
@@ -269,7 +281,9 @@ async function loadRemoteData() {
       id: Number(user.id),
       user_id: Number(user.id),
       foto_path: stripDiacritics(user.lamina_path || ''),
-      secret_code: '',
+      secret_code: generateDemoSecretCode(user.id * 997),
+      secret_code_uses_total: 1 + Math.floor(seededFraction(user.id * 73) * 4),
+      secret_code_uses_remaining: 1 + Math.floor(seededFraction(user.id * 73) * 4),
     }));
   }
 
@@ -326,6 +340,8 @@ function rebuildDerivedData() {
     .map(figurita => ({
       ...figurita,
       foto_path: stripDiacritics(figurita.foto_path || ''),
+      secret_code: figurita.secret_code || '',
+      ...normalizeCodeUsage(figurita),
     }))
     .sort(sortByIdAscending);
   APP.usuarioFiguritas = [...APP.usuarioFiguritas];
@@ -354,6 +370,8 @@ function rebuildDerivedData() {
       user_id: Number(f.user_id),
       foto_path: fotoPath,
       secret_code: f.secret_code || '',
+      secret_code_uses_total: normalizeCodeUsage(f).total,
+      secret_code_uses_remaining: normalizeCodeUsage(f).remaining,
       lamina_path: user?.lamina_path || '',
       user,
       name: user?.name || `Usuario ${f.user_id}`,
@@ -398,10 +416,14 @@ function rebuildDerivedData() {
   APP.stickers = APP.figuritas.map(figurita => {
     const user = APP.usuariosById.get(Number(figurita.user_id));
     const fotoPath = figurita.foto_path || user?.lamina_path || '';
+    const usage = normalizeCodeUsage(figurita);
     return {
       id: Number(figurita.id),
       user_id: Number(figurita.user_id),
       foto_path: fotoPath,
+      secret_code: figurita.secret_code || '',
+      secret_code_uses_total: usage.total,
+      secret_code_uses_remaining: usage.remaining,
       lamina_path: user?.lamina_path || '',
       user,
       name: user?.name || `Usuario ${figurita.user_id}`,
@@ -1058,12 +1080,20 @@ function demoActivateStickerWithCode(userId, stickerId, code) {
     throw new Error('codigo incorrecto');
   }
 
+  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(stickerId));
+  const usage = normalizeCodeUsage(rawSticker || sticker);
+  if (usage.remaining <= 0) {
+    throw new Error('codigo agotado');
+  }
+
   const current = getLocalQty(userId, stickerId);
   setLocalStickerQty(userId, stickerId, current + 1);
 
-  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(stickerId));
   if (rawSticker && !rawSticker.foto_path) {
     rawSticker.foto_path = sticker.lamina_path || '';
+  }
+  if (rawSticker) {
+    rawSticker.secret_code_uses_remaining = Math.max(0, usage.remaining - 1);
   }
 
   return 'activated';
@@ -1095,13 +1125,16 @@ async function submitStickerCode() {
         p_codigo: code,
       });
       if (error) throw error;
+      secretCodesRows = [];
+      secretCodesLoaded = false;
       await reloadFromSource();
     } else {
       demoActivateStickerWithCode(currentUserId, pendingStickerId, code);
+      secretCodesRows = [];
+      secretCodesLoaded = false;
       rebuildDerivedData();
       renderAll();
     }
-
     closeStickerCodeModal();
     showToast('✅ Figurita activada');
   } catch (error) {
@@ -1109,6 +1142,8 @@ async function submitStickerCode() {
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('codigo incorrecto')) {
       setStickerCodeError('Código incorrecto.');
+    } else if (msg.includes('codigo agotado')) {
+      setStickerCodeError('Este código ya no tiene usos disponibles.');
     } else if (msg.includes('figurita no encontrada')) {
       setStickerCodeError('Figurita no encontrada.');
     } else {
@@ -1522,19 +1557,23 @@ function renderCodesTableRows() {
   if (!body) return;
 
   if (!codesAccessGranted) {
-    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">Vista bloqueada.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">Vista bloqueada.</div></td></tr>';
     return;
   }
 
   if (!secretCodesRows.length) {
-    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">No hay códigos para mostrar.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">No hay códigos para mostrar.</div></td></tr>';
     return;
   }
 
   body.innerHTML = secretCodesRows.map(row => `
-    <tr>
+    <tr class="${normalizeCodeUsage(row).remaining <= 0 ? 'is-expired' : ''}">
       <td class="codes-name">${escapeHtml(row.nombre || '')}</td>
       <td class="codes-secret">${escapeHtml(row.secret_code || '')}</td>
+      <td class="codes-usage">${(() => {
+        const usage = normalizeCodeUsage(row);
+        return `${usage.remaining}/${usage.total}`;
+      })()}</td>
     </tr>
   `).join('');
 }
@@ -1550,7 +1589,7 @@ async function loadCodesRows() {
     for (const viewName of remoteViews) {
       const { data, error } = await supabaseClient
         .from(viewName)
-        .select('figurita_id,nombre,secret_code')
+        .select('*')
         .order('figurita_id', { ascending: true });
 
       if (!error) return data || [];
@@ -1564,10 +1603,13 @@ async function loadCodesRows() {
 
   return APP.figuritas.map(figurita => {
     const user = APP.usuariosById.get(Number(figurita.user_id));
+    const usage = normalizeCodeUsage(figurita);
     return {
       figurita_id: Number(figurita.id),
       nombre: user?.name || `Usuario ${figurita.user_id}`,
       secret_code: figurita.secret_code || '',
+      secret_code_uses_total: usage.total,
+      secret_code_uses_remaining: usage.remaining,
     };
   }).sort((a, b) => Number(a.figurita_id) - Number(b.figurita_id));
 }
@@ -1584,7 +1626,7 @@ async function refreshCodesRows() {
   if (secretCodesLoading) return;
 
   secretCodesLoading = true;
-  body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">Cargando códigos...</div></td></tr>';
+  body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">Cargando códigos...</div></td></tr>';
 
   try {
     secretCodesRows = await loadCodesRows();
@@ -1592,7 +1634,7 @@ async function refreshCodesRows() {
     renderCodesTableRows();
   } catch (error) {
     console.error(error);
-    body.innerHTML = '<tr><td colspan="2"><div class="codes-empty">No se pudieron cargar los códigos.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="3"><div class="codes-empty">No se pudieron cargar los códigos.</div></td></tr>';
   } finally {
     secretCodesLoading = false;
   }

@@ -874,7 +874,7 @@
   .codes-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 420px;
+    min-width: 560px;
   }
   .codes-table thead th {
     text-align: left;
@@ -895,6 +895,9 @@
   .codes-table tbody tr:hover {
     background: rgba(255,255,255,0.03);
   }
+  .codes-table tbody tr.is-expired {
+    background: rgba(231,76,60,0.05);
+  }
   .codes-name {
     font-weight: 800;
   }
@@ -903,6 +906,22 @@
     font-size: 13px;
     letter-spacing: 1px;
     color: var(--gold);
+  }
+  .codes-usage,
+  .codes-usage-head {
+    text-align: center;
+    white-space: nowrap;
+  }
+  .codes-usage {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,0.9);
+    font-weight: 700;
+  }
+  .codes-table tbody tr.is-expired .codes-secret,
+  .codes-table tbody tr.is-expired .codes-usage {
+    color: #ff8d8d;
   }
   .codes-empty {
     padding: 28px;
@@ -1066,7 +1085,7 @@
       <div class="section-header" style="margin-bottom:0;">
         <div>
           <div class="section-title">🔐 Códigos Secretos</div>
-          <div class="codes-subtitle">Vista oculta protegida por clave. Solo muestra nombre y secret_code por figurita.</div>
+          <div class="codes-subtitle">Vista oculta protegida por clave. Muestra nombre, código y usos restantes por figurita.</div>
         </div>
       </div>
       <div class="codes-card">
@@ -1076,6 +1095,7 @@
               <tr>
                 <th>Figurita</th>
                 <th>Código</th>
+                <th class="codes-usage-head">Usos</th>
               </tr>
             </thead>
             <tbody id="codes-table-body"></tbody>
@@ -1180,6 +1200,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="app.js?v=20260604-2"></script>
+<script src="app.js?v=20260608-1"></script>
 </body>
 </html>
