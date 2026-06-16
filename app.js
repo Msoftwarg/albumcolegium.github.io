@@ -2049,19 +2049,17 @@ async function runValidationSheetCheck() {
     const sheetKeys = buildSheetValidationKeySet(importedRows);
     const pendingRows = await loadPendingValidationRows();
     const approveIds = [];
-    const rejectIds = [];
 
     pendingRows.forEach(row => {
       const user = getUserById(row.user_id);
       const sticker = getStickerById(row.figurita_id);
       const key = makeValidationKey(user?.name || '', sticker?.name || '');
       if (sheetKeys.has(key)) approveIds.push(row.id);
-      else rejectIds.push(row.id);
     });
 
     const approveResult = await processPendingValidationIds(approveIds, true);
-    const rejectResult = await processPendingValidationIds(rejectIds, false);
-    validationRunStatus = `Aprobadas ${approveResult.processedCount} y rechazadas ${rejectResult.processedCount}.`;
+    const untouchedCount = Math.max(0, pendingRows.length - approveResult.processedCount);
+    validationRunStatus = `Aprobadas ${approveResult.processedCount}; ${untouchedCount} quedaron pendientes.`;
     renderValidationRunState();
     showToast(validationRunStatus);
   } catch (error) {
