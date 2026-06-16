@@ -882,6 +882,10 @@
   .codes-card-header {
     padding: 18px 18px 14px;
     border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
   }
   .codes-panel-title {
     font-family: 'Bebas Neue', sans-serif;
@@ -946,6 +950,12 @@
     text-align: center;
     color: rgba(255,255,255,0.35);
   }
+  .validation-run-status {
+    margin-top: 10px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.48);
+    padding: 0 18px 16px;
+  }
 
   @media (max-width: 768px) {
     .trades-layout { grid-template-columns: 1fr; }
@@ -953,6 +963,7 @@
     .stats-bar { grid-template-columns: 1fr 1fr; }
     .header-nav .nav-btn { padding: 8px 10px; font-size: 11px; }
     main { padding: 16px; }
+    .codes-card-header { flex-direction: column; }
   }
 </style>
 </head>
@@ -1122,8 +1133,9 @@
       <div class="codes-card">
         <div class="codes-card-header">
           <div class="codes-panel-title">🕓 Pendientes de validación</div>
-          <div class="codes-subtitle">Aprobá la figurita para que se agregue al álbum del usuario.</div>
+          <button class="btn btn-propose btn-small" id="validation-run-btn" type="button">Correr</button>
         </div>
+        <div class="validation-run-status" id="validation-run-status">Listo para correr.</div>
         <div class="codes-table-wrap">
           <table class="codes-table pending-table">
             <thead>
@@ -1236,6 +1248,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="app.js?v=20260608-1"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="app.js?v=20260616-1"></script>
 </body>
 </html>

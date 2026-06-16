@@ -51,6 +51,6 @@ select public.configurar_codigo_secreto(42, 'MI-CODIGO');
 
 Si dejás el código vacío, la función conserva el código actual de esa figurita.
 
-La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible. Debajo de los códigos ahora aparece la tabla de solicitudes pendientes para aprobar o rechazar cada figurita.
+La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible. Debajo de la tabla de solicitudes pendientes hay un botón `Correr` que toma la hoja fija `Repartidos`, lee `Usuario` desde la columna `B` desde la fila `1` y `Lamina` desde la columna `F` desde la fila `1`, y aprueba o rechaza cada validación según exista o no en esa hoja.
 
 Con eso, `usuarios`, `figuritas`, `usuario_figuritas`, `intercambios`, `mensajes` y `comentarios` quedan sincronizados entre usuarios.

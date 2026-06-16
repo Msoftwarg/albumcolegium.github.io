@@ -66,6 +66,8 @@ let secretCodesLoading = false;
 let pendingValidationRows = [];
 let pendingValidationLoaded = false;
 let pendingValidationLoading = false;
+let validationRunStatus = 'Listo para correr.';
+let validationRunLoading = false;
 let toastTimeout = null;
 
 function createEmptyApp() {
@@ -462,6 +464,114 @@ function normalizeCredential(value) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function resetValidationRunState() {
+  validationRunStatus = 'Listo para correr.';
+  validationRunLoading = false;
+}
+
+function columnLabelToIndex(label) {
+  const normalized = String(label || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+
+  if (!normalized) return -1;
+
+  let index = 0;
+  for (let i = 0; i < normalized.length; i += 1) {
+    index = (index * 26) + (normalized.charCodeAt(i) - 64);
+  }
+  return index - 1;
+}
+
+function getValidationSheetMapping() {
+  return {
+    userColumn: 'B',
+    userRow: 1,
+    laminaColumn: 'F',
+    laminaRow: 1,
+  };
+}
+
+const VALIDATION_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1bVScFcc4jGKN3kNnL1wmK7GY8HG322UKSMVJpEcksnI/export?format=csv&gid=0';
+
+function sheetMatrixToValidationRows(matrix, mapping) {
+  const userColumnIndex = columnLabelToIndex(mapping.userColumn);
+  const laminaColumnIndex = columnLabelToIndex(mapping.laminaColumn);
+  if (userColumnIndex < 0 || laminaColumnIndex < 0) {
+    return [];
+  }
+
+  const firstRow = Math.min(mapping.userRow, mapping.laminaRow);
+  const userOffset = mapping.userRow - firstRow;
+  const laminaOffset = mapping.laminaRow - firstRow;
+  const userRows = Math.max(0, matrix.length - mapping.userRow + 1);
+  const laminaRows = Math.max(0, matrix.length - mapping.laminaRow + 1);
+  const totalRows = Math.max(userRows - userOffset, laminaRows - laminaOffset);
+  const rows = [];
+
+  for (let i = 0; i < totalRows; i += 1) {
+    const userSheetRow = mapping.userRow + i;
+    const laminaSheetRow = mapping.laminaRow + i;
+    const userSourceRow = matrix[userSheetRow - 1] || [];
+    const laminaSourceRow = matrix[laminaSheetRow - 1] || [];
+    const usuario = String(userSourceRow[userColumnIndex] ?? '').trim();
+    const lamina = String(laminaSourceRow[laminaColumnIndex] ?? '').trim();
+
+    if (!usuario && !lamina) continue;
+
+    rows.push({
+      usuario,
+      lamina,
+      user_row: userSheetRow,
+      lamina_row: laminaSheetRow,
+    });
+  }
+
+  return rows;
+}
+
+function workbookToMatrix(workbook) {
+  const sheetName = workbook.SheetNames?.[0];
+  if (!sheetName) return [];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) return [];
+  return window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+}
+
+async function readValidationSheetRows() {
+  if (!window.XLSX) {
+    throw new Error('No se pudo cargar el lector de Excel.');
+  }
+
+  const response = await fetch(VALIDATION_SHEET_URL, { mode: 'cors' });
+  if (!response.ok) {
+    throw new Error(`No se pudo leer la hoja (${response.status}).`);
+  }
+
+  const text = await response.text();
+  const workbook = window.XLSX.read(text, { type: 'string' });
+  const matrix = workbookToMatrix(workbook);
+  const mapping = getValidationSheetMapping();
+  return sheetMatrixToValidationRows(matrix, mapping).filter(row => row.usuario || row.lamina);
+}
+
+function makeValidationKey(userName, laminaName) {
+  const userKey = normalizeCredential(userName);
+  const laminaKey = normalizeCredential(laminaName);
+  if (!userKey || !laminaKey) return '';
+  return `${userKey}|${laminaKey}`;
+}
+
+function buildSheetValidationKeySet(rows) {
+  const keys = new Set();
+  (rows || []).forEach(row => {
+    const key = makeValidationKey(row.usuario, row.lamina);
+    if (key) keys.add(key);
+  });
+  return keys;
+}
+
 function loadAuthSession() {
   try {
     const raw = sessionStorage.getItem(AUTH_SESSION_KEY);
@@ -705,6 +815,27 @@ function bindCodesUi() {
   }
 }
 
+function bindValidationRunUi() {
+  const button = document.getElementById('validation-run-btn');
+
+  if (button && !button.dataset.bound) {
+    button.dataset.bound = 'true';
+    button.addEventListener('click', () => {
+      if (!currentUserId) {
+        showAuthScreen();
+        return;
+      }
+      if (!codesAccessGranted) {
+        openCodesAccessModal();
+        return;
+      }
+      void runValidationSheetCheck();
+    });
+  }
+
+  renderValidationRunState();
+}
+
 function openCodesAccessModal() {
   if (!currentUserId) {
     showAuthScreen();
@@ -818,6 +949,7 @@ function logoutCurrentUser() {
   currentUserId = null;
   clearAuthSession();
   clearCodesAccess();
+  resetValidationRunState();
   setLoginError('');
   setCodesAccessError('');
   const usernameInput = document.getElementById('login-username');
@@ -1705,6 +1837,19 @@ function renderPendingValidationsRows() {
   }).join('');
 }
 
+function renderValidationRunState() {
+  const status = document.getElementById('validation-run-status');
+  const button = document.getElementById('validation-run-btn');
+
+  if (button) {
+    button.disabled = validationRunLoading;
+  }
+
+  if (status) {
+    status.textContent = validationRunLoading ? 'Corriendo...' : validationRunStatus;
+  }
+}
+
 async function loadPendingValidationRows() {
   if (!currentUserId || !codesAccessGranted) return [];
 
@@ -1788,6 +1933,60 @@ function renderCodesView() {
   } else {
     renderPendingValidationsRows();
   }
+
+  renderValidationRunState();
+}
+
+async function processPendingValidationIds(validationIds, shouldApprove) {
+  if (!currentUserId) {
+    showAuthScreen();
+    return { processedCount: 0, failedCount: validationIds?.length || 0 };
+  }
+
+  const ids = [...new Set((validationIds || []).map(Number).filter(Number.isFinite))];
+  if (!ids.length) {
+    return { processedCount: 0, failedCount: 0 };
+  }
+
+  const rpcName = shouldApprove ? 'aprobar_validacion_secreta' : 'rechazar_validacion_secreta';
+  let processedCount = 0;
+  let failedCount = 0;
+
+  if (usingRemoteDb()) {
+    for (const validationId of ids) {
+      try {
+        const { error } = await supabaseClient.rpc(rpcName, {
+          p_validacion_id: validationId,
+          p_approved_by_user_id: currentUserId,
+        });
+        if (error) throw error;
+        processedCount += 1;
+      } catch (error) {
+        console.error(error);
+        failedCount += 1;
+      }
+    }
+
+    pendingValidationLoaded = false;
+    await reloadFromSource();
+    return { processedCount, failedCount };
+  }
+
+  for (const validationId of ids) {
+    try {
+      if (shouldApprove) demoApproveValidation(validationId, currentUserId);
+      else demoRejectValidation(validationId, currentUserId);
+      processedCount += 1;
+    } catch (error) {
+      console.error(error);
+      failedCount += 1;
+    }
+  }
+
+  pendingValidationLoaded = false;
+  rebuildDerivedData();
+  renderAll();
+  return { processedCount, failedCount };
 }
 
 async function approvePendingValidation(validationId) {
@@ -1797,22 +1996,12 @@ async function approvePendingValidation(validationId) {
   }
 
   try {
-    if (usingRemoteDb()) {
-      const { error } = await supabaseClient.rpc('aprobar_validacion_secreta', {
-        p_validacion_id: validationId,
-        p_approved_by_user_id: currentUserId,
-      });
-      if (error) throw error;
-      pendingValidationLoaded = false;
-      await reloadFromSource();
+    const result = await processPendingValidationIds([validationId], true);
+    if (result.processedCount > 0) {
+      showToast('✅ Figurita aprobada');
     } else {
-      demoApproveValidation(validationId, currentUserId);
-      pendingValidationLoaded = false;
-      rebuildDerivedData();
-      renderAll();
+      showToast('No se pudo aprobar la solicitud');
     }
-
-    showToast('✅ Figurita aprobada');
   } catch (error) {
     console.error(error);
     showToast('No se pudo aprobar la solicitud');
@@ -1826,25 +2015,63 @@ async function rejectPendingValidation(validationId) {
   }
 
   try {
-    if (usingRemoteDb()) {
-      const { error } = await supabaseClient.rpc('rechazar_validacion_secreta', {
-        p_validacion_id: validationId,
-        p_approved_by_user_id: currentUserId,
-      });
-      if (error) throw error;
-      pendingValidationLoaded = false;
-      await reloadFromSource();
+    const result = await processPendingValidationIds([validationId], false);
+    if (result.processedCount > 0) {
+      showToast('❌ Solicitud rechazada');
     } else {
-      demoRejectValidation(validationId, currentUserId);
-      pendingValidationLoaded = false;
-      rebuildDerivedData();
-      renderAll();
+      showToast('No se pudo rechazar la solicitud');
     }
-
-    showToast('❌ Solicitud rechazada');
   } catch (error) {
     console.error(error);
     showToast('No se pudo rechazar la solicitud');
+  }
+}
+
+async function runValidationSheetCheck() {
+  if (!currentUserId) {
+    showAuthScreen();
+    return;
+  }
+
+  if (!codesAccessGranted) {
+    openCodesAccessModal();
+    return;
+  }
+
+  if (validationRunLoading) return;
+
+  validationRunLoading = true;
+  validationRunStatus = 'Corriendo...';
+  renderValidationRunState();
+
+  try {
+    const importedRows = await readValidationSheetRows();
+    const sheetKeys = buildSheetValidationKeySet(importedRows);
+    const pendingRows = await loadPendingValidationRows();
+    const approveIds = [];
+    const rejectIds = [];
+
+    pendingRows.forEach(row => {
+      const user = getUserById(row.user_id);
+      const sticker = getStickerById(row.figurita_id);
+      const key = makeValidationKey(user?.name || '', sticker?.name || '');
+      if (sheetKeys.has(key)) approveIds.push(row.id);
+      else rejectIds.push(row.id);
+    });
+
+    const approveResult = await processPendingValidationIds(approveIds, true);
+    const rejectResult = await processPendingValidationIds(rejectIds, false);
+    validationRunStatus = `Aprobadas ${approveResult.processedCount} y rechazadas ${rejectResult.processedCount}.`;
+    renderValidationRunState();
+    showToast(validationRunStatus);
+  } catch (error) {
+    console.error(error);
+    validationRunStatus = `No se pudo correr: ${String(error?.message || error || '')}`;
+    renderValidationRunState();
+    showToast('No se pudo correr la validación');
+  } finally {
+    validationRunLoading = false;
+    renderValidationRunState();
   }
 }
 
@@ -2071,6 +2298,7 @@ async function boot() {
   bindNavButtons();
   bindAuthForm();
   bindCodesUi();
+  bindValidationRunUi();
   updateNavActive();
   if (currentUserId) {
     showAppShell();
