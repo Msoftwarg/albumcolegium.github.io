@@ -2058,8 +2058,7 @@ async function runValidationSheetCheck() {
     });
 
     const approveResult = await processPendingValidationIds(approveIds, true);
-    const untouchedCount = Math.max(0, pendingRows.length - approveResult.processedCount);
-    validationRunStatus = `Aprobadas ${approveResult.processedCount}; ${untouchedCount} quedaron pendientes.`;
+    validationRunStatus = `Aprobadas ${approveResult.processedCount}.`;
     renderValidationRunState();
     showToast(validationRunStatus);
   } catch (error) {
