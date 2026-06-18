@@ -1984,8 +1984,12 @@ async function processPendingValidationIds(validationIds, shouldApprove) {
     if (processedRows.length) {
       processedRows.forEach(validation => syncValidationDecisionLocally(validation, shouldApprove, currentUserId));
       rebuildDerivedData();
-      renderAll();
-    } else {
+    }
+
+    try {
+      await reloadFromSource(false);
+    } catch (reloadError) {
+      console.error(reloadError);
       renderAll();
     }
 
@@ -2151,7 +2155,7 @@ function syncValidationDecisionLocally(validation, shouldApprove, approvedByUser
     const rawSticker = APP.figuritas.find(item => Number(item.id) === figuritaId);
     const sticker = getStickerById(figuritaId);
     if (rawSticker && !rawSticker.foto_path) {
-      rawSticker.foto_path = sticker?.lamina_path || rawSticker.foto_path || '';
+      rawSticker.foto_path = sticker?.foto_path || sticker?.lamina_path || rawSticker.foto_path || '';
     }
   }
 
