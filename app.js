@@ -211,6 +211,27 @@ function getUserById(id) {
   return APP.usuariosById.get(Number(id)) || null;
 }
 
+function deriveStickerLaminaPath(name) {
+  const normalizedName = stripDiacritics(name || '').trim();
+  if (!normalizedName) return '';
+  return `laminas/${normalizedName}.png`;
+}
+
+function resolveStickerImagePath(sticker) {
+  if (!sticker) return '';
+
+  const candidates = [
+    sticker.foto_path,
+    sticker.lamina_path,
+    sticker.user?.lamina_path,
+    sticker.user?.name ? deriveStickerLaminaPath(sticker.user.name) : '',
+    sticker.name ? deriveStickerLaminaPath(sticker.name) : '',
+  ];
+
+  const rawPath = candidates.find(value => String(value || '').trim()) || '';
+  return rawPath ? encodeURI(String(rawPath).trim()) : '';
+}
+
 function buildFallbackData() {
   const usuarios = TEAM_SEED.map(user => ({
     id: user.id,
@@ -387,7 +408,12 @@ function rebuildDerivedData() {
 
   APP.figuritasById = new Map(APP.figuritas.map(f => {
     const user = APP.usuariosById.get(Number(f.user_id)) || null;
-    const fotoPath = f.foto_path || user?.lamina_path || '';
+    const fotoPath = resolveStickerImagePath({
+      foto_path: f.foto_path,
+      lamina_path: user?.lamina_path || '',
+      user,
+      name: user?.name || `Usuario ${f.user_id}`,
+    });
     const enriched = {
       id: Number(f.id),
       user_id: Number(f.user_id),
@@ -445,7 +471,12 @@ function rebuildDerivedData() {
 
   APP.stickers = APP.figuritas.map(figurita => {
     const user = APP.usuariosById.get(Number(figurita.user_id));
-    const fotoPath = figurita.foto_path || user?.lamina_path || '';
+    const fotoPath = resolveStickerImagePath({
+      foto_path: figurita.foto_path,
+      lamina_path: user?.lamina_path || '',
+      user,
+      name: user?.name || `Usuario ${figurita.user_id}`,
+    });
     return {
       id: Number(figurita.id),
       user_id: Number(figurita.user_id),
@@ -1162,7 +1193,7 @@ function stickerHTML(sticker, qty, userId) {
         ? '<div class="sticker-badge">✓</div>'
         : `<div class="sticker-badge dup">x${qty}</div>`;
   const bg = BG_COLORS[(sticker.id - 1) % BG_COLORS.length];
-  const imagePath = sticker.foto_path || sticker.lamina_path || '';
+  const imagePath = resolveStickerImagePath(sticker);
   const imageHTML = isPending
     ? imagePath
       ? `
@@ -2154,8 +2185,8 @@ function syncValidationDecisionLocally(validation, shouldApprove, approvedByUser
 
     const rawSticker = APP.figuritas.find(item => Number(item.id) === figuritaId);
     const sticker = getStickerById(figuritaId);
-    if (rawSticker && !rawSticker.foto_path) {
-      rawSticker.foto_path = sticker?.foto_path || sticker?.lamina_path || rawSticker.foto_path || '';
+    if (rawSticker) {
+      rawSticker.foto_path = resolveStickerImagePath(sticker || rawSticker);
     }
   }
 
