@@ -1959,16 +1959,21 @@ async function processPendingValidationIds(validationIds, shouldApprove) {
   const rpcName = shouldApprove ? 'aprobar_validacion_secreta' : 'rechazar_validacion_secreta';
   let processedCount = 0;
   let failedCount = 0;
+  const processedRows = [];
 
   if (usingRemoteDb()) {
     for (const validationId of ids) {
       try {
+        const validation = pendingValidationRows.find(item => Number(item.id) === Number(validationId))
+          || APP.validacionesSecretas.find(item => Number(item.id) === Number(validationId))
+          || null;
         const { error } = await supabaseClient.rpc(rpcName, {
           p_validacion_id: validationId,
           p_approved_by_user_id: currentUserId,
         });
         if (error) throw error;
         processedCount += 1;
+        if (validation) processedRows.push(validation);
       } catch (error) {
         console.error(error);
         failedCount += 1;
@@ -1976,7 +1981,17 @@ async function processPendingValidationIds(validationIds, shouldApprove) {
     }
 
     pendingValidationLoaded = false;
-    await reloadFromSource();
+    if (processedRows.length) {
+      processedRows.forEach(validation => syncValidationDecisionLocally(validation, shouldApprove, currentUserId));
+      rebuildDerivedData();
+      renderAll();
+      setTimeout(() => {
+        void reloadFromSource(false).catch(error => console.error(error));
+      }, 200);
+    } else {
+      await reloadFromSource(false).catch(error => console.error(error));
+      renderAll();
+    }
     return { processedCount, failedCount };
   }
 
@@ -2120,6 +2135,54 @@ function getTradeItemRows(tradeId) {
   return APP.intercambioItems.filter(row => Number(row.intercambio_id) === Number(tradeId));
 }
 
+function syncValidationDecisionLocally(validation, shouldApprove, approvedByUserId) {
+  if (!validation) return;
+
+  const validationId = Number(validation.id);
+  const userId = Number(validation.user_id);
+  const figuritaId = Number(validation.figurita_id);
+  const validationIndex = APP.validacionesSecretas.findIndex(item => Number(item.id) === validationId);
+  const stamp = new Date().toISOString();
+
+  if (shouldApprove) {
+    const currentQty = getLocalQty(userId, figuritaId);
+    setLocalStickerQty(userId, figuritaId, currentQty + 1);
+
+    const rawSticker = APP.figuritas.find(item => Number(item.id) === figuritaId);
+    const sticker = getStickerById(figuritaId);
+    if (rawSticker && !rawSticker.foto_path) {
+      rawSticker.foto_path = sticker?.lamina_path || rawSticker.foto_path || '';
+    }
+  }
+
+  if (validationIndex >= 0) {
+    if (shouldApprove) {
+      APP.validacionesSecretas.splice(validationIndex, 1);
+    } else {
+      APP.validacionesSecretas[validationIndex] = {
+        ...APP.validacionesSecretas[validationIndex],
+        status: 'rejected',
+        responded_at: stamp,
+        responded_by_user_id: approvedByUserId == null ? null : Number(approvedByUserId),
+      };
+    }
+  }
+
+  const pendingIndex = pendingValidationRows.findIndex(row => Number(row.id) === validationId);
+  if (pendingIndex >= 0) {
+    if (shouldApprove) {
+      pendingValidationRows.splice(pendingIndex, 1);
+    } else {
+      pendingValidationRows[pendingIndex] = {
+        ...pendingValidationRows[pendingIndex],
+        status: 'rejected',
+        responded_at: stamp,
+        responded_by_user_id: approvedByUserId == null ? null : Number(approvedByUserId),
+      };
+    }
+  }
+}
+
 function demoCreateTrade(fromUserId, toUserId, msg, offerIds, requestIds) {
   const tradeId = Date.now();
   const trade = {
@@ -2202,21 +2265,7 @@ function demoApproveValidation(validationId, approvedByUserId) {
   const validation = APP.validacionesSecretas.find(item => Number(item.id) === Number(validationId));
   if (!validation) throw new Error('validacion no encontrada');
   if (validation.status !== 'pending') throw new Error('validacion ya procesada');
-
-  const sticker = getStickerById(validation.figurita_id);
-  if (!sticker) throw new Error('figurita no encontrada');
-
-  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(validation.figurita_id));
-  const currentQty = getLocalQty(validation.user_id, validation.figurita_id);
-  setLocalStickerQty(validation.user_id, validation.figurita_id, currentQty + 1);
-
-  if (rawSticker && !rawSticker.foto_path) {
-    rawSticker.foto_path = sticker.lamina_path || '';
-  }
-
-  validation.status = 'accepted';
-  validation.responded_at = new Date().toISOString();
-  validation.responded_by_user_id = approvedByUserId == null ? null : Number(approvedByUserId);
+  syncValidationDecisionLocally(validation, true, approvedByUserId);
 }
 
 function demoRejectValidation(validationId, approvedByUserId) {
@@ -2224,9 +2273,7 @@ function demoRejectValidation(validationId, approvedByUserId) {
   if (!validation) throw new Error('validacion no encontrada');
   if (validation.status !== 'pending') throw new Error('validacion ya procesada');
 
-  validation.status = 'rejected';
-  validation.responded_at = new Date().toISOString();
-  validation.responded_by_user_id = approvedByUserId == null ? null : Number(approvedByUserId);
+  syncValidationDecisionLocally(validation, false, approvedByUserId);
 }
 
 function demoCreateMessage(fromUserId, toUserId, body) {
