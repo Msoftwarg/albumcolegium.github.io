@@ -69,6 +69,7 @@ let pendingValidationLoading = false;
 let validationRunStatus = 'Listo para correr.';
 let validationRunLoading = false;
 let toastTimeout = null;
+let tradePickLoadToken = 0;
 
 function createEmptyApp() {
   return {
@@ -83,6 +84,8 @@ function createEmptyApp() {
     usuariosById: new Map(),
     figuritasById: new Map(),
     ownedByUser: {},
+    ownedSummaryByUser: new Map(),
+    tradeOwnedByUser: new Map(),
     pendingByUser: {},
     validacionesSecretasById: new Map(),
     tradeItemsByTrade: new Map(),
@@ -199,6 +202,16 @@ function getOwnedMap(userId) {
   return APP.ownedByUser[userId] || {};
 }
 
+function getOwnedCountForRanking(userId) {
+  const summary = APP.ownedSummaryByUser?.get(Number(userId));
+  if (Number.isFinite(summary)) return Number(summary);
+  return countDistinctOwned(getOwnedMap(userId));
+}
+
+function getTradeOwnedMap(userId) {
+  return APP.tradeOwnedByUser?.get(Number(userId)) || {};
+}
+
 function getPendingValidation(userId, figuritaId) {
   return APP.pendingByUser?.[Number(userId)]?.[Number(figuritaId)] || null;
 }
@@ -286,6 +299,7 @@ function buildFallbackData() {
     intercambioItems: [],
     mensajes: [],
     comentarios: [],
+    tradeOwnedByUser: new Map(),
   };
 }
 
@@ -331,6 +345,32 @@ async function fetchUserFiguritasRows(userId) {
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
 }
 
+async function fetchOwnedSummaryRows() {
+  if (usingRemoteDb()) {
+    try {
+      const { data, error } = await supabaseClient.rpc('listar_resumen_usuario_figuritas');
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.warn('No se pudo cargar listar_resumen_usuario_figuritas.', error);
+      return [];
+    }
+  }
+
+  const summary = new Map();
+  APP.usuarioFiguritas.forEach(row => {
+    if (Number(row.cantidad) > 0) {
+      const userId = Number(row.user_id);
+      summary.set(userId, (summary.get(userId) || 0) + 1);
+    }
+  });
+
+  return [...summary.entries()].map(([user_id, figuritas_distintas]) => ({
+    user_id,
+    figuritas_distintas,
+  }));
+}
+
 async function fetchRemoteRows({ rpcName, table, orderColumn = 'id', ascending = true, columns = '*' }) {
   if (rpcName) {
     try {
@@ -368,6 +408,7 @@ async function loadRemoteData() {
 
   const [
     usuarioFiguritas,
+    ownedSummaryRows,
     validacionesSecretas,
     intercambios,
     intercambioItems,
@@ -375,6 +416,7 @@ async function loadRemoteData() {
     comentarios,
   ] = await Promise.all([
     fetchUserFiguritasRows(currentUserId),
+    fetchOwnedSummaryRows(),
     fetchRemoteRows({ rpcName: 'listar_validaciones_secretas_pendientes', table: 'validaciones_secretas', orderColumn: 'created_at' }),
     fetchRemoteRows({ table: 'intercambios', orderColumn: 'created_at' }),
     fetchRemoteRows({ table: 'intercambio_items', orderColumn: 'id' }),
@@ -402,11 +444,18 @@ async function loadRemoteData() {
     usuariosById: new Map(),
     figuritasById: new Map(),
     ownedByUser: {},
+    ownedSummaryByUser: new Map(),
+    tradeOwnedByUser: new Map(),
     pendingByUser: {},
     validacionesSecretasById: new Map(),
     tradeItemsByTrade: new Map(),
     stickers: [],
   };
+
+  APP.ownedSummaryByUser = new Map((ownedSummaryRows || []).map(row => [
+    Number(row.user_id),
+    Number(row.figuritas_distintas) || 0,
+  ]));
 }
 
 function rebuildDerivedData() {
@@ -536,6 +585,8 @@ function rebuildDerivedData() {
       initials: initialsFromName(user?.name || `#${figurita.id}`),
     };
   });
+
+  APP.tradeOwnedByUser = new Map();
 }
 
 function hydrateUiState() {
@@ -1546,28 +1597,14 @@ function openModal() {
       });
     sel.onchange = () => {
       selectedRequest = new Set();
-      refreshPickGrids();
+      void refreshPickGrids();
     };
   }
 
   const msgInput = document.getElementById('trade-msg');
   if (msgInput) msgInput.value = '';
-  refreshPickGrids();
+  void refreshPickGrids();
   document.getElementById('trade-modal').classList.add('open');
-}
-
-function refreshPickGrids() {
-  const partnerId = Number(document.getElementById('trade-partner').value || 0);
-  const myOwned = getOwnedMap(currentUserId);
-  const partnerOwned = getOwnedMap(partnerId);
-
-  const myDupes = APP.stickers.filter(sticker => (myOwned[sticker.id] || 0) >= 2);
-  renderPickGrid('offer-grid', myDupes, selectedOffer, 'offer');
-
-  const partnerDupesIMissing = partnerId
-    ? APP.stickers.filter(sticker => (partnerOwned[sticker.id] || 0) >= 2 && (myOwned[sticker.id] || 0) === 0)
-    : [];
-  renderPickGrid('request-grid', partnerDupesIMissing, selectedRequest, 'request');
 }
 
 function renderPickGrid(containerId, stickers, selected, type) {
@@ -1586,11 +1623,64 @@ function renderPickGrid(containerId, stickers, selected, type) {
   `).join('');
 }
 
+async function loadTradePartnerOwnedMap(userId) {
+  const numericUserId = Number(userId);
+  if (!Number.isFinite(numericUserId) || numericUserId <= 0) return {};
+
+  const cached = APP.tradeOwnedByUser.get(numericUserId);
+  if (cached) return cached;
+
+  const rows = await fetchUserFiguritasRows(numericUserId);
+  const owned = {};
+  rows.forEach(row => {
+    const figuritaId = Number(row.figurita_id);
+    const cantidad = Number(row.cantidad) || 0;
+    if (cantidad > 0) owned[figuritaId] = cantidad;
+  });
+
+  APP.tradeOwnedByUser.set(numericUserId, owned);
+  return owned;
+}
+
+async function refreshPickGrids() {
+  const partnerId = Number(document.getElementById('trade-partner').value || 0);
+  const myOwned = getOwnedMap(currentUserId);
+
+  const myDupes = APP.stickers.filter(sticker => (myOwned[sticker.id] || 0) >= 2);
+  renderPickGrid('offer-grid', myDupes, selectedOffer, 'offer');
+
+  const requestGrid = document.getElementById('request-grid');
+  if (requestGrid) {
+    requestGrid.innerHTML = partnerId
+      ? '<div style="color:rgba(255,255,255,0.3); font-size:13px; padding:16px; grid-column:1/-1; text-align:center;">Cargando repetidas...</div>'
+      : '<div style="color:rgba(255,255,255,0.3); font-size:13px; padding:16px; grid-column:1/-1; text-align:center;">Selecciona un compañero primero</div>';
+  }
+
+  if (!partnerId) return;
+
+  const token = ++tradePickLoadToken;
+  try {
+    const partnerOwned = await loadTradePartnerOwnedMap(partnerId);
+    if (token !== tradePickLoadToken) return;
+
+    const partnerDupesIMissing = APP.stickers.filter(sticker =>
+      (partnerOwned[sticker.id] || 0) >= 2 && (myOwned[sticker.id] || 0) === 0
+    );
+    renderPickGrid('request-grid', partnerDupesIMissing, selectedRequest, 'request');
+  } catch (error) {
+    if (token !== tradePickLoadToken) return;
+    console.error(error);
+    if (requestGrid) {
+      requestGrid.innerHTML = '<div style="color:rgba(255,255,255,0.3); font-size:13px; padding:16px; grid-column:1/-1; text-align:center;">No se pudieron cargar las repetidas</div>';
+    }
+  }
+}
+
 function togglePick(id, type) {
   const set = type === 'offer' ? selectedOffer : selectedRequest;
   if (set.has(id)) set.delete(id);
   else set.add(id);
-  refreshPickGrids();
+  void refreshPickGrids();
 }
 
 async function submitTrade() {
@@ -1775,8 +1865,7 @@ async function addComment() {
 
 function renderRanking() {
   const scores = APP.usuarios.map(user => {
-    const owned = getOwnedMap(user.id);
-    const count = countDistinctOwned(owned);
+    const count = getOwnedCountForRanking(user.id);
     const pct = APP.stickers.length ? Math.round((count / APP.stickers.length) * 100) : 0;
     return {
       ...user,

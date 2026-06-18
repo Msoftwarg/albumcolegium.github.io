@@ -44,6 +44,24 @@ as $$
   order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
 $$;
 
+create or replace function public.listar_resumen_usuario_figuritas()
+returns table (
+  user_id bigint,
+  figuritas_distintas integer
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    uf.user_id,
+    count(*)::integer as figuritas_distintas
+  from public.usuario_figuritas uf
+  where uf.cantidad > 0
+  group by uf.user_id
+  order by uf.user_id asc;
+$$;
+
 create or replace function public.listar_validaciones_secretas_pendientes()
 returns table (
   id bigint,
@@ -73,4 +91,5 @@ $$;
 
 grant execute on function public.listar_usuario_figuritas() to anon, authenticated;
 grant execute on function public.listar_usuario_figuritas_por_usuario(bigint) to anon, authenticated;
+grant execute on function public.listar_resumen_usuario_figuritas() to anon, authenticated;
 grant execute on function public.listar_validaciones_secretas_pendientes() to anon, authenticated;
