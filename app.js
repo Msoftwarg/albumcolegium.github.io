@@ -298,6 +298,39 @@ async function fetchTable(table, orderColumn = 'id', ascending = true, columns =
   return data || [];
 }
 
+async function fetchUserFiguritasRows(userId) {
+  const numericUserId = Number(userId);
+  if (!Number.isFinite(numericUserId)) return [];
+
+  if (usingRemoteDb()) {
+    try {
+      const { data, error } = await supabaseClient.rpc('listar_usuario_figuritas_por_usuario', {
+        p_user_id: numericUserId,
+      });
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.warn('No se pudo cargar listar_usuario_figuritas_por_usuario por RPC; se intenta con tabla filtrada.', error);
+      try {
+        const { data, error: tableError } = await supabaseClient
+          .from('usuario_figuritas')
+          .select('user_id,figurita_id,cantidad,created_at')
+          .eq('user_id', numericUserId)
+          .order('created_at', { ascending: true });
+        if (tableError) throw tableError;
+        return data || [];
+      } catch (tableError) {
+        console.warn('No se pudieron cargar usuario_figuritas filtradas desde la DB.', tableError);
+        return [];
+      }
+    }
+  }
+
+  return APP.usuarioFiguritas
+    .filter(row => Number(row.user_id) === numericUserId)
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+}
+
 async function fetchRemoteRows({ rpcName, table, orderColumn = 'id', ascending = true, columns = '*' }) {
   if (rpcName) {
     try {
@@ -341,7 +374,7 @@ async function loadRemoteData() {
     mensajes,
     comentarios,
   ] = await Promise.all([
-    fetchRemoteRows({ rpcName: 'listar_usuario_figuritas', table: 'usuario_figuritas', orderColumn: 'created_at' }),
+    fetchUserFiguritasRows(currentUserId),
     fetchRemoteRows({ rpcName: 'listar_validaciones_secretas_pendientes', table: 'validaciones_secretas', orderColumn: 'created_at' }),
     fetchRemoteRows({ table: 'intercambios', orderColumn: 'created_at' }),
     fetchRemoteRows({ table: 'intercambio_items', orderColumn: 'id' }),
@@ -350,11 +383,10 @@ async function loadRemoteData() {
   ]);
 
   if (currentUserId != null) {
-    const currentUserRows = usuarioFiguritas.filter(row => Number(row.user_id) === Number(currentUserId));
     console.log('[debug] usuarioFiguritas current user', {
       currentUserId: Number(currentUserId),
-      totalRows: usuarioFiguritas.length,
-      currentUserRows,
+      loadedRows: usuarioFiguritas.length,
+      rows: usuarioFiguritas,
     });
   }
 
@@ -997,9 +1029,13 @@ async function attemptLogin() {
   setLoginError('');
   if (usernameInput) usernameInput.value = '';
   if (passwordInput) passwordInput.value = '';
-  updateCurrentUserDisplay();
   showAppShell();
-  renderAll();
+  try {
+    await reloadFromSource();
+  } catch (error) {
+    console.error(error);
+    renderAll();
+  }
 }
 
 function logoutCurrentUser() {

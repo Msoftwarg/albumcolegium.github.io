@@ -21,6 +21,29 @@ as $$
   order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
 $$;
 
+create or replace function public.listar_usuario_figuritas_por_usuario(
+  p_user_id bigint
+)
+returns table (
+  user_id bigint,
+  figurita_id bigint,
+  cantidad integer,
+  created_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    uf.user_id,
+    uf.figurita_id,
+    uf.cantidad,
+    uf.created_at
+  from public.usuario_figuritas uf
+  where uf.user_id = p_user_id
+  order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
+$$;
+
 create or replace function public.listar_validaciones_secretas_pendientes()
 returns table (
   id bigint,
@@ -49,4 +72,5 @@ as $$
 $$;
 
 grant execute on function public.listar_usuario_figuritas() to anon, authenticated;
+grant execute on function public.listar_usuario_figuritas_por_usuario(bigint) to anon, authenticated;
 grant execute on function public.listar_validaciones_secretas_pendientes() to anon, authenticated;
