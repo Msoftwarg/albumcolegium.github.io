@@ -229,7 +229,14 @@ function resolveStickerImagePath(sticker) {
   ];
 
   const rawPath = candidates.find(value => String(value || '').trim()) || '';
-  return rawPath ? encodeURI(String(rawPath).trim()) : '';
+  if (!rawPath) return '';
+
+  const trimmed = String(rawPath).trim();
+  try {
+    return encodeURI(decodeURI(trimmed));
+  } catch {
+    return trimmed;
+  }
 }
 
 function buildFallbackData() {
@@ -341,6 +348,15 @@ async function loadRemoteData() {
     fetchRemoteRows({ table: 'mensajes', orderColumn: 'created_at' }),
     fetchRemoteRows({ table: 'comentarios', orderColumn: 'created_at' }),
   ]);
+
+  if (currentUserId != null) {
+    const currentUserRows = usuarioFiguritas.filter(row => Number(row.user_id) === Number(currentUserId));
+    console.log('[debug] usuarioFiguritas current user', {
+      currentUserId: Number(currentUserId),
+      totalRows: usuarioFiguritas.length,
+      currentUserRows,
+    });
+  }
 
   APP = {
     usuarios,
