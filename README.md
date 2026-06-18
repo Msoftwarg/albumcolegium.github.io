@@ -23,6 +23,8 @@ La tabla `usuarios` ya no usa `role` ni `pais_id`: ahora solo guarda `name`, `lo
 
 Cuando se ingresa un código, la función `activar_figurita_con_codigo` ya no acredita la figurita de inmediato: crea una fila en `validaciones_secretas` con estado `pending`. En el álbum, esa figurita queda marcada como `Pendiente de validación` hasta que alguien la aprueba desde la vista oculta. Cuando se aprueba, `aprobar_validacion_secreta` agrega la figurita al álbum del usuario y copia la imagen a `figuritas.foto_path` si todavía estaba vacía.
 
+El frontend carga el estado del álbum y las pendientes con RPCs `listar_usuario_figuritas` y `listar_validaciones_secretas_pendientes`, para no depender de `select` directos sobre tablas que pueden estar restringidas en Supabase. Si ya tenés datos cargados, usá [db/migration-validation-rpc.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-validation-rpc.sql) en vez de correr todo `db/schema.sql`.
+
 Si necesitás ver los códigos secretos generados por la DB, corré en el SQL Editor:
 
 ```sql

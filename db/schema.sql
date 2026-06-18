@@ -398,6 +398,53 @@ begin
 end;
 $$;
 
+create or replace function public.listar_usuario_figuritas()
+returns table (
+  user_id bigint,
+  figurita_id bigint,
+  cantidad integer,
+  created_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    uf.user_id,
+    uf.figurita_id,
+    uf.cantidad,
+    uf.created_at
+  from public.usuario_figuritas uf
+  order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
+$$;
+
+create or replace function public.listar_validaciones_secretas_pendientes()
+returns table (
+  id bigint,
+  user_id bigint,
+  figurita_id bigint,
+  status text,
+  created_at timestamptz,
+  responded_at timestamptz,
+  responded_by_user_id bigint
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select
+    vs.id,
+    vs.user_id,
+    vs.figurita_id,
+    vs.status,
+    vs.created_at,
+    vs.responded_at,
+    vs.responded_by_user_id
+  from public.validaciones_secretas vs
+  where vs.status = 'pending'
+  order by vs.created_at asc, vs.id asc;
+$$;
+
 create or replace function public.rechazar_validacion_secreta(
   p_validacion_id bigint,
   p_approved_by_user_id bigint default null
@@ -633,6 +680,8 @@ grant select on public.codigos_secretos to anon, authenticated;
 grant select on public.codigos_sectretos to anon, authenticated;
 grant select on public.validaciones_secretas to anon, authenticated;
 grant select on public.usuarios, public.figuritas, public.usuario_figuritas, public.intercambios, public.intercambio_items, public.mensajes, public.comentarios to anon, authenticated;
+grant execute on function public.listar_usuario_figuritas() to anon, authenticated;
+grant execute on function public.listar_validaciones_secretas_pendientes() to anon, authenticated;
 grant execute on function public.set_usuario_figurita_qty(bigint, bigint, integer) to anon, authenticated;
 grant execute on function public.activar_figurita_con_codigo(bigint, bigint, text) to anon, authenticated;
 grant execute on function public.aprobar_validacion_secreta(bigint, bigint) to anon, authenticated;

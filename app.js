@@ -270,6 +270,25 @@ async function fetchTable(table, orderColumn = 'id', ascending = true, columns =
   return data || [];
 }
 
+async function fetchRemoteRows({ rpcName, table, orderColumn = 'id', ascending = true, columns = '*' }) {
+  if (rpcName) {
+    try {
+      const { data, error } = await supabaseClient.rpc(rpcName);
+      if (!error) return data || [];
+      console.warn(`No se pudo cargar ${rpcName} por RPC; se intenta con tabla.`, error);
+    } catch (error) {
+      console.warn(`No se pudo cargar ${rpcName} por RPC; se intenta con tabla.`, error);
+    }
+  }
+
+  try {
+    return await fetchTable(table, orderColumn, ascending, columns);
+  } catch (error) {
+    console.warn(`No se pudieron cargar ${table} desde la DB.`, error);
+    return [];
+  }
+}
+
 async function loadRemoteData() {
   const usuarios = await fetchTable('usuarios', 'id');
 
@@ -286,15 +305,6 @@ async function loadRemoteData() {
     }));
   }
 
-  const loadOrEmpty = async (table, orderColumn, ascending = true, columns = '*') => {
-    try {
-      return await fetchTable(table, orderColumn, ascending, columns);
-    } catch (error) {
-      console.warn(`No se pudieron cargar ${table} desde la DB.`, error);
-      return [];
-    }
-  };
-
   const [
     usuarioFiguritas,
     validacionesSecretas,
@@ -303,12 +313,12 @@ async function loadRemoteData() {
     mensajes,
     comentarios,
   ] = await Promise.all([
-    loadOrEmpty('usuario_figuritas', 'created_at'),
-    loadOrEmpty('validaciones_secretas', 'created_at'),
-    loadOrEmpty('intercambios', 'created_at'),
-    loadOrEmpty('intercambio_items', 'id'),
-    loadOrEmpty('mensajes', 'created_at'),
-    loadOrEmpty('comentarios', 'created_at'),
+    fetchRemoteRows({ rpcName: 'listar_usuario_figuritas', table: 'usuario_figuritas', orderColumn: 'created_at' }),
+    fetchRemoteRows({ rpcName: 'listar_validaciones_secretas_pendientes', table: 'validaciones_secretas', orderColumn: 'created_at' }),
+    fetchRemoteRows({ table: 'intercambios', orderColumn: 'created_at' }),
+    fetchRemoteRows({ table: 'intercambio_items', orderColumn: 'id' }),
+    fetchRemoteRows({ table: 'mensajes', orderColumn: 'created_at' }),
+    fetchRemoteRows({ table: 'comentarios', orderColumn: 'created_at' }),
   ]);
 
   APP = {
@@ -1856,11 +1866,7 @@ async function loadPendingValidationRows() {
   if (!currentUserId || !codesAccessGranted) return [];
 
   if (usingRemoteDb()) {
-    const { data, error } = await supabaseClient
-      .from('validaciones_secretas')
-      .select('id,user_id,figurita_id,status,created_at,responded_at,responded_by_user_id')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true });
+    const { data, error } = await supabaseClient.rpc('listar_validaciones_secretas_pendientes');
     if (error) throw error;
     return (data || []).map(row => ({
       id: Number(row.id),
