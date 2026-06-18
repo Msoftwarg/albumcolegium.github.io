@@ -1985,12 +1985,12 @@ async function processPendingValidationIds(validationIds, shouldApprove) {
       processedRows.forEach(validation => syncValidationDecisionLocally(validation, shouldApprove, currentUserId));
       rebuildDerivedData();
       renderAll();
-      setTimeout(() => {
-        void reloadFromSource(false).catch(error => console.error(error));
-      }, 200);
     } else {
-      await reloadFromSource(false).catch(error => console.error(error));
       renderAll();
+    }
+
+    if (codesAccessGranted) {
+      void refreshPendingValidationRows().catch(error => console.error(error));
     }
     return { processedCount, failedCount };
   }
