@@ -1135,33 +1135,35 @@ function renderStickerGrid(containerId, filter, userId) {
 }
 
 function stickerHTML(sticker, qty, userId) {
-  let stateClass = '';
-  let badgeHTML = '';
   const pendingValidation = userId ? getPendingValidation(userId, sticker.id) : null;
-  if (qty === 0) {
-    if (pendingValidation) {
-      stateClass = 'pending';
-      badgeHTML = '<div class="sticker-badge pending-badge">Pendiente</div>';
-    } else {
-      stateClass = 'missing';
-      badgeHTML = '<div class="sticker-badge missing-badge">Falta</div>';
-    }
-  } else if (qty === 1) {
-    stateClass = 'owned';
-    badgeHTML = '<div class="sticker-badge">✓</div>';
-  } else {
-    stateClass = 'duplicate owned';
-    badgeHTML = `<div class="sticker-badge dup">x${qty}</div>`;
-  }
-
+  const isPending = Boolean(pendingValidation);
+  const stateClass = isPending
+    ? 'pending'
+    : qty === 0
+      ? 'missing'
+      : qty === 1
+        ? 'owned'
+        : 'duplicate owned';
+  const badgeHTML = isPending
+    ? '<div class="sticker-badge pending-badge">Pendiente</div>'
+    : qty === 0
+      ? '<div class="sticker-badge missing-badge">Falta</div>'
+      : qty === 1
+        ? '<div class="sticker-badge">✓</div>'
+        : `<div class="sticker-badge dup">x${qty}</div>`;
   const bg = BG_COLORS[(sticker.id - 1) % BG_COLORS.length];
-  const imagePath = qty > 0 ? (sticker.foto_path || sticker.lamina_path || '') : '';
-  const imageHTML = imagePath
-    ? `<img class="sticker-image" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">`
-    : pendingValidation
-      ? `<div class="sticker-pending" style="background:${bg}; color:rgba(255,255,255,0.95);">Pendiente de validaci&oacute;n</div>`
+  const imagePath = sticker.foto_path || sticker.lamina_path || '';
+  const imageHTML = isPending
+    ? imagePath
+      ? `
+        <img class="sticker-image sticker-image-pending" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">
+        <div class="sticker-pending-overlay">Pendiente de validaci&oacute;n</div>
+      `
+      : `<div class="sticker-pending" style="background:${bg}; color:rgba(255,255,255,0.95);">Pendiente de validaci&oacute;n</div>`
+    : imagePath && qty > 0
+      ? `<img class="sticker-image" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">`
       : `<div class="sticker-avatar" style="background:${bg}; color:rgba(255,255,255,0.9);">${escapeHtml(sticker.initials)}</div>`;
-  const title = pendingValidation
+  const title = isPending
     ? 'Pendiente de validación'
     : 'Click para activar con código secreto';
 
