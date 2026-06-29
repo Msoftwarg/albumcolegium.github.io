@@ -23,7 +23,7 @@ La tabla `usuarios` ya no usa `role` ni `pais_id`: ahora solo guarda `name`, `lo
 
 Cuando se ingresa un código, la función `activar_figurita_con_codigo` ya no acredita la figurita de inmediato: crea una fila en `validaciones_secretas` con estado `pending`. En el álbum, esa figurita queda marcada como `Pendiente de validación` hasta que alguien la aprueba desde la vista oculta. Cuando se aprueba, `aprobar_validacion_secreta` agrega la figurita al álbum del usuario y copia la imagen a `figuritas.foto_path` si todavía estaba vacía.
 
-El frontend carga el estado del álbum y las pendientes con RPCs `listar_usuario_figuritas` y `listar_validaciones_secretas_pendientes`, para no depender de `select` directos sobre tablas que pueden estar restringidas en Supabase. Si ya tenés datos cargados, usá [db/migration-validation-rpc.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-validation-rpc.sql) y [db/migration-trade-offer-reservation.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-trade-offer-reservation.sql) en vez de correr todo `db/schema.sql`.
+El frontend carga el estado del álbum y las pendientes con RPCs `listar_usuario_figuritas`, `listar_validaciones_secretas_pendientes` y `listar_consumo_validacion_figuritas`, para no depender de `select` directos sobre tablas que pueden estar restringidas en Supabase. Si ya tenés datos cargados, usá [db/migration-validation-rpc.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-validation-rpc.sql), [db/migration-validation-usage-rpc.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-validation-usage-rpc.sql) y [db/migration-trade-offer-reservation.sql](/Users/martin_sztajn/Desktop/albumcolegium.github.io/db/migration-trade-offer-reservation.sql) en vez de correr todo `db/schema.sql`.
 
 Si necesitás ver los códigos secretos generados por la DB, corré en el SQL Editor:
 
@@ -53,6 +53,6 @@ select public.configurar_codigo_secreto(42, 'MI-CODIGO');
 
 Si dejás el código vacío, la función conserva el código actual de esa figurita.
 
-La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible. Debajo de la tabla de solicitudes pendientes hay un botón `Correr` que toma la hoja fija `Repartidos`, lee `Usuario` desde la columna `B` desde la fila `1` y `Lamina` desde la columna `F` desde la fila `1`, y aprueba solo las validaciones que existan en esa hoja. Las que no aparecen quedan pendientes.
+La vista oculta del frontend usa `codigos_secretos` y se habilita con la clave `aguantecolegium`. Se deja `codigos_sectretos` como alias compatible. Debajo de la tabla de solicitudes pendientes hay un botón `Correr` que toma la hoja fija `Repartidos`, lee `Usuario` desde la columna `B` desde la fila `1` y `Lamina` desde la columna `F` desde la fila `1`, y aprueba solo las validaciones que existan en esa hoja. Además, respeta la cantidad de apariciones de cada usuario y lámina en la hoja: si las copias ya registradas más las comprometidas en intercambios pendientes o aceptados igualan o superan ese cupo, la solicitud queda pendiente.
 
 Con eso, `usuarios`, `figuritas`, `usuario_figuritas`, `intercambios`, `mensajes` y `comentarios` quedan sincronizados entre usuarios.

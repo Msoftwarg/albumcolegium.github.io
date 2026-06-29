@@ -703,13 +703,14 @@ function makeValidationKey(userName, laminaName) {
   return `${userKey}|${laminaKey}`;
 }
 
-function buildSheetValidationKeySet(rows) {
-  const keys = new Set();
+function buildSheetValidationCountMap(rows) {
+  const counts = new Map();
   (rows || []).forEach(row => {
     const key = makeValidationKey(row.usuario, row.lamina);
-    if (key) keys.add(key);
+    if (!key) return;
+    counts.set(key, (counts.get(key) || 0) + 1);
   });
-  return keys;
+  return counts;
 }
 
 function loadAuthSession() {
@@ -2192,6 +2193,86 @@ async function refreshPendingValidationRows() {
   }
 }
 
+function makeValidationUsageKey(userId, figuritaId) {
+  return `${Number(userId)}|${Number(figuritaId)}`;
+}
+
+function addValidationUsageCount(counts, userId, figuritaId, qty = 1) {
+  const numericUserId = Number(userId);
+  const numericFiguritaId = Number(figuritaId);
+  const numericQty = Number(qty) || 0;
+  if (!Number.isFinite(numericUserId) || !Number.isFinite(numericFiguritaId) || numericQty <= 0) return;
+
+  const key = makeValidationUsageKey(numericUserId, numericFiguritaId);
+  counts.set(key, (counts.get(key) || 0) + numericQty);
+}
+
+function buildValidationUsageRows({ usuarioFiguritas, intercambios, intercambioItems }) {
+  const counts = new Map();
+
+  (usuarioFiguritas || []).forEach(row => {
+    addValidationUsageCount(counts, row.user_id, row.figurita_id, row.cantidad);
+  });
+
+  const tradesById = new Map((intercambios || []).map(trade => [Number(trade.id), trade]));
+  (intercambioItems || []).forEach(item => {
+    const trade = tradesById.get(Number(item.intercambio_id));
+    if (!trade || !['pending', 'accepted'].includes(trade.status)) return;
+
+    let ownerUserId = null;
+    if (item.side === 'offer') ownerUserId = trade.from_user_id;
+    if (item.side === 'request') ownerUserId = trade.to_user_id;
+    addValidationUsageCount(counts, ownerUserId, item.figurita_id, 1);
+  });
+
+  return [...counts.entries()].map(([key, cantidad]) => {
+    const [userId, figuritaId] = key.split('|').map(Number);
+    return {
+      user_id: userId,
+      figurita_id: figuritaId,
+      cantidad,
+    };
+  });
+}
+
+async function loadValidationUsageRows() {
+  if (usingRemoteDb()) {
+    try {
+      const { data, error } = await supabaseClient.rpc('listar_consumo_validacion_figuritas');
+      if (error) throw error;
+      return (data || []).map(row => ({
+        user_id: Number(row.user_id),
+        figurita_id: Number(row.figurita_id),
+        cantidad: Number(row.cantidad) || 0,
+      }));
+    } catch (error) {
+      console.warn('No se pudo cargar listar_consumo_validacion_figuritas; se intenta calcular desde tablas.', error);
+    }
+
+    const [usuarioFiguritas, intercambios, intercambioItems] = await Promise.all([
+      fetchRemoteRows({ rpcName: 'listar_usuario_figuritas', table: 'usuario_figuritas', orderColumn: 'created_at' }),
+      fetchRemoteRows({ table: 'intercambios', orderColumn: 'created_at', columns: 'id,from_user_id,to_user_id,status' }),
+      fetchRemoteRows({ table: 'intercambio_items', orderColumn: 'id', columns: 'intercambio_id,figurita_id,side' }),
+    ]);
+    return buildValidationUsageRows({ usuarioFiguritas, intercambios, intercambioItems });
+  }
+
+  return buildValidationUsageRows({
+    usuarioFiguritas: APP.usuarioFiguritas,
+    intercambios: APP.intercambios,
+    intercambioItems: APP.intercambioItems,
+  });
+}
+
+async function loadValidationUsageCountMap() {
+  const rows = await loadValidationUsageRows();
+  const counts = new Map();
+  rows.forEach(row => {
+    addValidationUsageCount(counts, row.user_id, row.figurita_id, row.cantidad);
+  });
+  return counts;
+}
+
 function renderCodesView() {
   const codesBody = document.getElementById('codes-table-body');
   const pendingBody = document.getElementById('pending-validations-table-body');
@@ -2346,19 +2427,40 @@ async function runValidationSheetCheck() {
 
   try {
     const importedRows = await readValidationSheetRows();
-    const sheetKeys = buildSheetValidationKeySet(importedRows);
+    const sheetCounts = buildSheetValidationCountMap(importedRows);
+    const usageCounts = await loadValidationUsageCountMap();
     const pendingRows = await loadPendingValidationRows();
     const approveIds = [];
+    let skippedBySheetCount = 0;
+    let skippedMissingFromSheet = 0;
 
     pendingRows.forEach(row => {
       const user = getUserById(row.user_id);
       const sticker = getStickerById(row.figurita_id);
-      const key = makeValidationKey(user?.name || '', sticker?.name || '');
-      if (sheetKeys.has(key)) approveIds.push(row.id);
+      const sheetKey = makeValidationKey(user?.name || '', sticker?.name || '');
+      const allowedCount = sheetCounts.get(sheetKey) || 0;
+      if (allowedCount <= 0) {
+        skippedMissingFromSheet += 1;
+        return;
+      }
+
+      const usageKey = makeValidationUsageKey(row.user_id, row.figurita_id);
+      const currentCount = usageCounts.get(usageKey) || 0;
+      if (currentCount >= allowedCount) {
+        skippedBySheetCount += 1;
+        return;
+      }
+
+      approveIds.push(row.id);
+      usageCounts.set(usageKey, currentCount + 1);
     });
 
     const approveResult = await processPendingValidationIds(approveIds, true);
-    validationRunStatus = `Aprobadas ${approveResult.processedCount}.`;
+    const statusParts = [`Aprobadas ${approveResult.processedCount}`];
+    if (approveResult.failedCount > 0) statusParts.push(`Fallidas ${approveResult.failedCount}`);
+    if (skippedBySheetCount > 0) statusParts.push(`Omitidas por cupo ${skippedBySheetCount}`);
+    if (skippedMissingFromSheet > 0) statusParts.push(`Sin registro en hoja ${skippedMissingFromSheet}`);
+    validationRunStatus = `${statusParts.join('. ')}.`;
     renderValidationRunState();
     showToast(validationRunStatus);
   } catch (error) {
