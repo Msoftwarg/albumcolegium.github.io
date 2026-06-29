@@ -1,11 +1,14 @@
 -- Safe migration for existing databases.
 -- This file only adds the RPCs needed by the frontend.
 
+drop function if exists public.listar_usuario_figuritas();
+
 create or replace function public.listar_usuario_figuritas()
 returns table (
   user_id bigint,
   figurita_id bigint,
   cantidad integer,
+  veces_pedidas integer,
   created_at timestamptz
 )
 language sql
@@ -16,10 +19,13 @@ as $$
     uf.user_id,
     uf.figurita_id,
     uf.cantidad,
+    uf.veces_pedidas,
     uf.created_at
   from public.usuario_figuritas uf
   order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
 $$;
+
+drop function if exists public.listar_usuario_figuritas_por_usuario(bigint);
 
 create or replace function public.listar_usuario_figuritas_por_usuario(
   p_user_id bigint
@@ -28,6 +34,7 @@ returns table (
   user_id bigint,
   figurita_id bigint,
   cantidad integer,
+  veces_pedidas integer,
   created_at timestamptz
 )
 language sql
@@ -38,6 +45,7 @@ as $$
     uf.user_id,
     uf.figurita_id,
     uf.cantidad,
+    uf.veces_pedidas,
     uf.created_at
   from public.usuario_figuritas uf
   where uf.user_id = p_user_id

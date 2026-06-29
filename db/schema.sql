@@ -170,6 +170,7 @@ create table if not exists public.usuario_figuritas (
   user_id bigint not null references public.usuarios(id) on update cascade on delete cascade,
   figurita_id bigint not null references public.figuritas(id) on update cascade on delete cascade,
   cantidad integer not null default 0 check (cantidad >= 0),
+  veces_pedidas integer not null default 0 check (veces_pedidas >= 0),
   created_at timestamptz not null default now(),
   primary key (user_id, figurita_id)
 );
@@ -269,9 +270,17 @@ begin
   end if;
 
   if p_qty = 0 then
+    update public.usuario_figuritas
+    set cantidad = 0,
+        created_at = now()
+    where user_id = p_user_id
+      and figurita_id = p_figurita_id
+      and veces_pedidas > 0;
+
     delete from public.usuario_figuritas
     where user_id = p_user_id
-      and figurita_id = p_figurita_id;
+      and figurita_id = p_figurita_id
+      and veces_pedidas = 0;
     return;
   end if;
 
@@ -287,7 +296,8 @@ $$;
 create or replace function public.activar_figurita_con_codigo(
   p_user_id bigint,
   p_figurita_id bigint,
-  p_codigo text
+  p_codigo text,
+  p_max_veces_pedidas integer default null
 )
 returns text
 language plpgsql
@@ -297,6 +307,7 @@ as $$
 declare
   v_secret text;
   v_has_pending boolean;
+  v_veces_pedidas integer;
 begin
   select f.secret_code
   into v_secret
@@ -325,6 +336,25 @@ begin
     raise exception 'ya pendiente';
   end if;
 
+  if coalesce(p_max_veces_pedidas, 0) <= 0 then
+    raise exception 'sin cupo en hoja';
+  end if;
+
+  insert into public.usuario_figuritas (user_id, figurita_id, cantidad, veces_pedidas, created_at)
+  values (p_user_id, p_figurita_id, 0, 0, now())
+  on conflict (user_id, figurita_id) do nothing;
+
+  select veces_pedidas
+  into v_veces_pedidas
+  from public.usuario_figuritas
+  where user_id = p_user_id
+    and figurita_id = p_figurita_id
+  for update;
+
+  if coalesce(v_veces_pedidas, 0) >= p_max_veces_pedidas then
+    raise exception 'sin cupo en hoja';
+  end if;
+
   insert into public.validaciones_secretas (
     user_id,
     figurita_id,
@@ -337,6 +367,12 @@ begin
     'pending',
     now()
   );
+
+  update public.usuario_figuritas
+  set veces_pedidas = veces_pedidas + 1,
+      created_at = now()
+  where user_id = p_user_id
+    and figurita_id = p_figurita_id;
 
   return 'pending';
 end;
@@ -403,6 +439,7 @@ returns table (
   user_id bigint,
   figurita_id bigint,
   cantidad integer,
+  veces_pedidas integer,
   created_at timestamptz
 )
 language sql
@@ -413,6 +450,7 @@ as $$
     uf.user_id,
     uf.figurita_id,
     uf.cantidad,
+    uf.veces_pedidas,
     uf.created_at
   from public.usuario_figuritas uf
   order by uf.created_at asc, uf.user_id asc, uf.figurita_id asc;
@@ -425,6 +463,7 @@ returns table (
   user_id bigint,
   figurita_id bigint,
   cantidad integer,
+  veces_pedidas integer,
   created_at timestamptz
 )
 language sql
@@ -435,6 +474,7 @@ as $$
     uf.user_id,
     uf.figurita_id,
     uf.cantidad,
+    uf.veces_pedidas,
     uf.created_at
   from public.usuario_figuritas uf
   where uf.user_id = p_user_id
@@ -798,7 +838,7 @@ grant execute on function public.listar_resumen_usuario_figuritas() to anon, aut
 grant execute on function public.listar_validaciones_secretas_pendientes() to anon, authenticated;
 grant execute on function public.listar_consumo_validacion_figuritas() to anon, authenticated;
 grant execute on function public.set_usuario_figurita_qty(bigint, bigint, integer) to anon, authenticated;
-grant execute on function public.activar_figurita_con_codigo(bigint, bigint, text) to anon, authenticated;
+grant execute on function public.activar_figurita_con_codigo(bigint, bigint, text, integer) to anon, authenticated;
 grant execute on function public.aprobar_validacion_secreta(bigint, bigint) to anon, authenticated;
 grant execute on function public.rechazar_validacion_secreta(bigint, bigint) to anon, authenticated;
 grant execute on function public.crear_intercambio(bigint, bigint, text, bigint[], bigint[]) to anon, authenticated;

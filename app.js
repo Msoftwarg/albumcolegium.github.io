@@ -277,6 +277,7 @@ function buildFallbackData() {
           user_id: user.id,
           figurita_id: figurita.id,
           cantidad: 1,
+          veces_pedidas: 0,
           created_at: new Date().toISOString(),
         });
       } else if (fraction < 0.72) {
@@ -284,6 +285,7 @@ function buildFallbackData() {
           user_id: user.id,
           figurita_id: figurita.id,
           cantidad: 2,
+          veces_pedidas: 0,
           created_at: new Date().toISOString(),
         });
       }
@@ -328,7 +330,7 @@ async function fetchUserFiguritasRows(userId) {
       try {
         const { data, error: tableError } = await supabaseClient
           .from('usuario_figuritas')
-          .select('user_id,figurita_id,cantidad,created_at')
+          .select('user_id,figurita_id,cantidad,veces_pedidas,created_at')
           .eq('user_id', numericUserId)
           .order('created_at', { ascending: true });
         if (tableError) throw tableError;
@@ -475,7 +477,13 @@ function rebuildDerivedData() {
       secret_code: figurita.secret_code || '',
     }))
     .sort(sortByIdAscending);
-  APP.usuarioFiguritas = [...APP.usuarioFiguritas];
+  APP.usuarioFiguritas = [...APP.usuarioFiguritas].map(row => ({
+    ...row,
+    user_id: Number(row.user_id),
+    figurita_id: Number(row.figurita_id),
+    cantidad: Number(row.cantidad) || 0,
+    veces_pedidas: Number(row.veces_pedidas) || 0,
+  }));
   APP.validacionesSecretas = [...APP.validacionesSecretas]
     .map(row => ({
       ...row,
@@ -711,6 +719,16 @@ function buildSheetValidationCountMap(rows) {
     counts.set(key, (counts.get(key) || 0) + 1);
   });
   return counts;
+}
+
+async function getValidationSheetAllowance(userId, stickerId) {
+  const user = getUserById(userId);
+  const sticker = getStickerById(stickerId);
+  if (!user || !sticker) return 0;
+
+  const rows = await readValidationSheetRows();
+  const counts = buildSheetValidationCountMap(rows);
+  return counts.get(makeValidationKey(user.name, sticker.name)) || 0;
 }
 
 function loadAuthSession() {
@@ -1381,7 +1399,7 @@ function closeStickerCodeModal() {
   if (modal) modal.classList.remove('open');
 }
 
-function demoActivateStickerWithCode(userId, stickerId, code) {
+function demoActivateStickerWithCode(userId, stickerId, code, maxRequests) {
   const sticker = getStickerById(stickerId);
   if (!sticker) {
     throw new Error('figurita no encontrada');
@@ -1395,6 +1413,16 @@ function demoActivateStickerWithCode(userId, stickerId, code) {
   if (existingPending) {
     throw new Error('ya pendiente');
   }
+
+  if (!Number.isFinite(Number(maxRequests)) || Number(maxRequests) <= 0) {
+    throw new Error('sin cupo en hoja');
+  }
+
+  if (getLocalStickerRequestCount(userId, stickerId) >= Number(maxRequests)) {
+    throw new Error('sin cupo en hoja');
+  }
+
+  incrementLocalStickerRequestCount(userId, stickerId);
 
   const validation = {
     id: Date.now(),
@@ -1429,11 +1457,18 @@ async function submitStickerCode() {
   }
 
   try {
+    const maxRequests = await getValidationSheetAllowance(currentUserId, pendingStickerId);
+    if (getLocalStickerRequestCount(currentUserId, pendingStickerId) >= maxRequests) {
+      setStickerCodeError('No hay más cupo para esta figurita según la hoja.');
+      return;
+    }
+
     if (usingRemoteDb()) {
       const { error } = await supabaseClient.rpc('activar_figurita_con_codigo', {
         p_user_id: currentUserId,
         p_figurita_id: pendingStickerId,
         p_codigo: code,
+        p_max_veces_pedidas: maxRequests,
       });
       if (error) throw error;
       secretCodesRows = [];
@@ -1441,7 +1476,7 @@ async function submitStickerCode() {
       pendingValidationLoaded = false;
       await reloadFromSource();
     } else {
-      demoActivateStickerWithCode(currentUserId, pendingStickerId, code);
+      demoActivateStickerWithCode(currentUserId, pendingStickerId, code, maxRequests);
       secretCodesRows = [];
       secretCodesLoaded = false;
       pendingValidationLoaded = false;
@@ -1457,8 +1492,12 @@ async function submitStickerCode() {
       setStickerCodeError('Código incorrecto.');
     } else if (msg.includes('ya pendiente')) {
       setStickerCodeError('Ya hay una solicitud pendiente para esa figurita.');
+    } else if (msg.includes('sin cupo') || msg.includes('cupo no informado')) {
+      setStickerCodeError('No hay más cupo para esta figurita según la hoja.');
     } else if (msg.includes('figurita no encontrada')) {
       setStickerCodeError('Figurita no encontrada.');
+    } else if (msg.includes('hoja') || msg.includes('sheet')) {
+      setStickerCodeError('No se pudo validar la hoja de repartidos.');
     } else {
       setStickerCodeError('No se pudo enviar la solicitud.');
     }
@@ -2494,15 +2533,33 @@ async function markMessagesAsRead(userId) {
 
 function setLocalStickerQty(userId, figuritaId, qty) {
   const idx = APP.usuarioFiguritas.findIndex(row => Number(row.user_id) === Number(userId) && Number(row.figurita_id) === Number(figuritaId));
+  const existing = idx >= 0 ? APP.usuarioFiguritas[idx] : null;
+  const requestedCount = Number(existing?.veces_pedidas) || 0;
+
   if (qty <= 0) {
-    if (idx >= 0) APP.usuarioFiguritas.splice(idx, 1);
+    if (idx >= 0) {
+      if (requestedCount > 0) {
+        APP.usuarioFiguritas[idx] = {
+          ...existing,
+          user_id: Number(userId),
+          figurita_id: Number(figuritaId),
+          cantidad: 0,
+          veces_pedidas: requestedCount,
+          created_at: new Date().toISOString(),
+        };
+      } else {
+        APP.usuarioFiguritas.splice(idx, 1);
+      }
+    }
     return;
   }
 
   const row = {
+    ...(existing || {}),
     user_id: Number(userId),
     figurita_id: Number(figuritaId),
     cantidad: Number(qty),
+    veces_pedidas: requestedCount,
     created_at: new Date().toISOString(),
   };
 
@@ -2627,6 +2684,37 @@ function demoApplyTrade(trade) {
 function getLocalQty(userId, figuritaId) {
   const row = APP.usuarioFiguritas.find(item => Number(item.user_id) === Number(userId) && Number(item.figurita_id) === Number(figuritaId));
   return row ? Number(row.cantidad) : 0;
+}
+
+function getLocalStickerRequestCount(userId, figuritaId) {
+  const row = APP.usuarioFiguritas.find(item => Number(item.user_id) === Number(userId) && Number(item.figurita_id) === Number(figuritaId));
+  return row ? Number(row.veces_pedidas) || 0 : 0;
+}
+
+function incrementLocalStickerRequestCount(userId, figuritaId) {
+  const idx = APP.usuarioFiguritas.findIndex(row => Number(row.user_id) === Number(userId) && Number(row.figurita_id) === Number(figuritaId));
+  const stamp = new Date().toISOString();
+
+  if (idx >= 0) {
+    const existing = APP.usuarioFiguritas[idx];
+    APP.usuarioFiguritas[idx] = {
+      ...existing,
+      user_id: Number(userId),
+      figurita_id: Number(figuritaId),
+      cantidad: Number(existing.cantidad) || 0,
+      veces_pedidas: (Number(existing.veces_pedidas) || 0) + 1,
+      created_at: stamp,
+    };
+    return;
+  }
+
+  APP.usuarioFiguritas.push({
+    user_id: Number(userId),
+    figurita_id: Number(figuritaId),
+    cantidad: 0,
+    veces_pedidas: 1,
+    created_at: stamp,
+  });
 }
 
 function demoRespondTrade(tradeId, response) {
