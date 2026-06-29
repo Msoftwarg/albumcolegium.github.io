@@ -1607,11 +1607,12 @@ function openModal() {
   document.getElementById('trade-modal').classList.add('open');
 }
 
-function renderPickGrid(containerId, stickers, selected, type) {
+function renderPickGrid(containerId, stickers, selected, type, emptyMessage) {
   const container = document.getElementById(containerId);
   if (!container) return;
   if (stickers.length === 0) {
-    container.innerHTML = `<div style="color:rgba(255,255,255,0.3); font-size:13px; padding:16px; grid-column:1/-1; text-align:center;">${type === 'offer' ? 'No tienes repetidas aún' : 'Selecciona un compañero primero'}</div>`;
+    const message = emptyMessage || (type === 'offer' ? 'No tienes repetidas aún' : 'Selecciona un compañero primero');
+    container.innerHTML = `<div style="color:rgba(255,255,255,0.3); font-size:13px; padding:16px; grid-column:1/-1; text-align:center;">${message}</div>`;
     return;
   }
 
@@ -1621,6 +1622,83 @@ function renderPickGrid(containerId, stickers, selected, type) {
       <div class="pick-name">${escapeHtml(sticker.name.split(' ')[0])}</div>
     </div>
   `).join('');
+}
+
+function getTradeOfferIds(trade) {
+  if (Array.isArray(trade?.offer)) {
+    return trade.offer.map(Number).filter(Number.isFinite);
+  }
+
+  const sides = APP.tradeItemsByTrade.get(Number(trade?.id));
+  return (sides?.offer || []).map(Number).filter(Number.isFinite);
+}
+
+function getPendingOfferedStickerIds(userId) {
+  const numericUserId = Number(userId);
+  const ids = new Set();
+  if (!Number.isFinite(numericUserId)) return ids;
+
+  APP.intercambios.forEach(trade => {
+    if (Number(trade.from_user_id) !== numericUserId || trade.status !== 'pending') return;
+    getTradeOfferIds(trade).forEach(figuritaId => ids.add(figuritaId));
+  });
+
+  return ids;
+}
+
+async function loadPendingOfferedStickerIds(userId) {
+  const localIds = getPendingOfferedStickerIds(userId);
+  if (!usingRemoteDb()) return localIds;
+
+  try {
+    const { data: trades, error: tradesError } = await supabaseClient
+      .from('intercambios')
+      .select('id')
+      .eq('from_user_id', Number(userId))
+      .eq('status', 'pending');
+    if (tradesError) throw tradesError;
+
+    const tradeIds = (trades || []).map(trade => Number(trade.id)).filter(Number.isFinite);
+    if (tradeIds.length === 0) return new Set();
+
+    const { data: items, error: itemsError } = await supabaseClient
+      .from('intercambio_items')
+      .select('figurita_id')
+      .in('intercambio_id', tradeIds)
+      .eq('side', 'offer');
+    if (itemsError) throw itemsError;
+
+    return new Set((items || []).map(item => Number(item.figurita_id)).filter(Number.isFinite));
+  } catch (error) {
+    console.warn('No se pudieron cargar las figuritas comprometidas; se usa el estado local.', error);
+    return localIds;
+  }
+}
+
+function getBlockedOfferIds(offerIds, pendingOfferIds) {
+  return [...new Set((offerIds || []).map(Number).filter(Number.isFinite))]
+    .filter(figuritaId => pendingOfferIds.has(figuritaId));
+}
+
+function removeBlockedOffersFromSelection(blockedIds) {
+  const blocked = new Set(blockedIds.map(Number));
+  selectedOffer = new Set([...selectedOffer].filter(figuritaId => !blocked.has(Number(figuritaId))));
+}
+
+function pendingOfferToast(blockedIds) {
+  const names = blockedIds
+    .map(figuritaId => getStickerById(figuritaId))
+    .filter(Boolean)
+    .map(sticker => `#${String(sticker.id).padStart(2, '0')} ${sticker.name}`);
+  const suffix = names.length ? `: ${names.join(', ')}` : '';
+  return `⚠️ Ya tienes esa lámina en un intercambio pendiente${suffix}`;
+}
+
+function assertNoPendingOfferConflict(userId, offerIds) {
+  const blockedIds = getBlockedOfferIds(offerIds, getPendingOfferedStickerIds(userId));
+  if (blockedIds.length > 0) {
+    throw new Error('figurita ya comprometida en intercambio pendiente');
+  }
 }
 
 async function loadTradePartnerOwnedMap(userId) {
@@ -1643,11 +1721,19 @@ async function loadTradePartnerOwnedMap(userId) {
 }
 
 async function refreshPickGrids() {
+  const token = ++tradePickLoadToken;
   const partnerId = Number(document.getElementById('trade-partner').value || 0);
   const myOwned = getOwnedMap(currentUserId);
+  const pendingOfferIds = await loadPendingOfferedStickerIds(currentUserId);
+  if (token !== tradePickLoadToken) return;
 
   const myDupes = APP.stickers.filter(sticker => (myOwned[sticker.id] || 0) >= 2);
-  renderPickGrid('offer-grid', myDupes, selectedOffer, 'offer');
+  removeBlockedOffersFromSelection(getBlockedOfferIds([...selectedOffer], pendingOfferIds));
+  const availableDupes = myDupes.filter(sticker => !pendingOfferIds.has(sticker.id));
+  const offerEmptyMessage = myDupes.length > 0
+    ? 'Tus repetidas están comprometidas en intercambios pendientes'
+    : 'No tienes repetidas aún';
+  renderPickGrid('offer-grid', availableDupes, selectedOffer, 'offer', offerEmptyMessage);
 
   const requestGrid = document.getElementById('request-grid');
   if (requestGrid) {
@@ -1658,7 +1744,6 @@ async function refreshPickGrids() {
 
   if (!partnerId) return;
 
-  const token = ++tradePickLoadToken;
   try {
     const partnerOwned = await loadTradePartnerOwnedMap(partnerId);
     if (token !== tradePickLoadToken) return;
@@ -1693,6 +1778,15 @@ async function submitTrade() {
   if (selectedOffer.size === 0) return showToast('⚠️ Selecciona qué figuritas ofreces');
   if (selectedRequest.size === 0) return showToast('⚠️ Selecciona qué figuritas pides');
 
+  const pendingOfferIds = await loadPendingOfferedStickerIds(currentUserId);
+  const blockedOfferIds = getBlockedOfferIds([...selectedOffer], pendingOfferIds);
+  if (blockedOfferIds.length > 0) {
+    removeBlockedOffersFromSelection(blockedOfferIds);
+    if (usingRemoteDb()) await reloadFromSource(false);
+    await refreshPickGrids();
+    return showToast(pendingOfferToast(blockedOfferIds));
+  }
+
   const msg = document.getElementById('trade-msg').value.trim();
   try {
     if (usingRemoteDb()) {
@@ -1716,7 +1810,14 @@ async function submitTrade() {
     showToast(`✅ Propuesta enviada a ${partner?.name || 'tu compañero'}!`);
   } catch (error) {
     console.error(error);
-    showToast('No se pudo enviar la propuesta');
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('figurita ya comprometida en intercambio pendiente')) {
+      await reloadFromSource(false);
+      await refreshPickGrids();
+      showToast('⚠️ Una de tus láminas ya está comprometida en un intercambio pendiente');
+    } else {
+      showToast('No se pudo enviar la propuesta');
+    }
   }
 }
 
@@ -2360,6 +2461,8 @@ function syncValidationDecisionLocally(validation, shouldApprove, approvedByUser
 }
 
 function demoCreateTrade(fromUserId, toUserId, msg, offerIds, requestIds) {
+  assertNoPendingOfferConflict(fromUserId, offerIds);
+
   const tradeId = Date.now();
   const trade = {
     id: tradeId,

@@ -537,7 +537,30 @@ as $$
 declare
   v_intercambio_id bigint;
   v_figid bigint;
+  v_blocked_offer_ids bigint[];
 begin
+  perform 1
+  from public.usuarios
+  where id = p_from_user_id
+  for update;
+
+  select coalesce(array_agg(distinct offered.fig_id), '{}'::bigint[])
+  into v_blocked_offer_ids
+  from unnest(coalesce(p_offer_ids, '{}'::bigint[])) as offered(fig_id)
+  where exists (
+    select 1
+    from public.intercambios i
+    join public.intercambio_items ii on ii.intercambio_id = i.id
+    where i.from_user_id = p_from_user_id
+      and i.status = 'pending'
+      and ii.side = 'offer'
+      and ii.figurita_id = offered.fig_id
+  );
+
+  if array_length(v_blocked_offer_ids, 1) is not null then
+    raise exception 'figurita ya comprometida en intercambio pendiente';
+  end if;
+
   insert into public.intercambios (from_user_id, to_user_id, msg, status, created_at)
   values (p_from_user_id, p_to_user_id, p_msg, 'pending', now())
   returning id into v_intercambio_id;
