@@ -157,7 +157,11 @@ insert into public.usuarios (id, name, login_name, login_password, lamina_path) 
   (153, 'Victor Gajardo', 'Victor Gajardo', 'Victor Gajardo', 'laminas/Victor Gajardo.png'),
   (154, 'William Guzman', 'William Guzman', 'William Guzman', 'laminas/William Guzman.png'),
   (155, 'Wolfran Pinzon', 'Wolfran Pinzon', 'Wolfran Pinzon', 'laminas/Wolfran Pinzon.png'),
-  (156, 'Yeferson Gomez', 'Yeferson Gomez', 'Yeferson Gomez', 'laminas/Yeferson Gomez.png')
+  (156, 'Yeferson Gomez', 'Yeferson Gomez', 'Yeferson Gomez', 'laminas/Yeferson Gomez.png'),
+  (157, 'Rocky', 'Rocky', 'Rocky', 'laminas/Rocky.png'),
+  (158, 'Robotito', 'Robotito', 'Robotito', 'laminas/Robotito.png'),
+  (159, 'Julio Iglesias', 'Julio Iglesias', 'Julio Iglesias', 'laminas/Julio Iglesias.png'),
+  (160, 'Elias Lescano', 'Elias Lescano', 'Elias Lescano', 'laminas/Elias Lescano.png')
 on conflict (id) do update set
   name = excluded.name,
   login_name = excluded.login_name,
@@ -320,8 +324,15 @@ insert into public.figuritas (id, user_id, foto_path) values
   (153, 153, 'laminas/Victor Gajardo.png'),
   (154, 154, 'laminas/William Guzman.png'),
   (155, 155, 'laminas/Wolfran Pinzon.png'),
-  (156, 156, 'laminas/Yeferson Gomez.png')
+  (156, 156, 'laminas/Yeferson Gomez.png'),
+  (157, 157, 'laminas/Rocky.png'),
+  (158, 158, 'laminas/Robotito.png'),
+  (159, 159, 'laminas/Julio Iglesias.png'),
+  (160, 160, 'laminas/Elias Lescano.png')
 on conflict (id) do update set
   user_id = excluded.user_id,
   foto_path = excluded.foto_path;
+
+select setval(pg_get_serial_sequence('public.usuarios', 'id'), (select max(id) from public.usuarios), true);
+select setval(pg_get_serial_sequence('public.figuritas', 'id'), (select max(id) from public.figuritas), true);
 

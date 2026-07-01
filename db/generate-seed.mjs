@@ -9,6 +9,10 @@ function escapeSql(value) {
   return String(value).replace(/'/g, "''");
 }
 
+function unescapeSql(value) {
+  return String(value).replace(/''/g, "'");
+}
+
 function stripDiacritics(value) {
   return String(value || '')
     .normalize('NFD')
@@ -20,6 +24,41 @@ function readLaminaFiles() {
     .readdirSync(LAMINAS_DIR)
     .filter(file => file.toLowerCase().endsWith('.png'))
     .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+}
+
+function readExistingSeedFileOrder() {
+  if (!fs.existsSync(OUTPUT_PATH)) return [];
+
+  const sql = fs.readFileSync(OUTPUT_PATH, 'utf8');
+  const ordered = [];
+  const seen = new Set();
+  const pathRegex = /'laminas\/((?:''|[^'])+\.png)'/g;
+
+  for (const match of sql.matchAll(pathRegex)) {
+    const safeFile = unescapeSql(match[1]);
+    if (seen.has(safeFile)) continue;
+    seen.add(safeFile);
+    ordered.push(safeFile);
+  }
+
+  return ordered;
+}
+
+function orderLaminaFiles(files) {
+  const filesBySafeName = new Map(files.map(file => [stripDiacritics(file), file]));
+  const ordered = [];
+
+  for (const safeFile of readExistingSeedFileOrder()) {
+    const file = filesBySafeName.get(safeFile);
+    if (!file) continue;
+    ordered.push(file);
+    filesBySafeName.delete(safeFile);
+  }
+
+  const newFiles = [...filesBySafeName.values()]
+    .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+
+  return [...ordered, ...newFiles];
 }
 
 function buildSql(files) {
@@ -54,11 +93,14 @@ function buildSql(files) {
   lines.push('  user_id = excluded.user_id,');
   lines.push('  foto_path = excluded.foto_path;');
   lines.push('');
+  lines.push("select setval(pg_get_serial_sequence('public.usuarios', 'id'), (select max(id) from public.usuarios), true);");
+  lines.push("select setval(pg_get_serial_sequence('public.figuritas', 'id'), (select max(id) from public.figuritas), true);");
+  lines.push('');
 
   return lines.join('\n');
 }
 
-const files = readLaminaFiles();
+const files = orderLaminaFiles(readLaminaFiles());
 
 if (!files.length) {
   throw new Error(`No PNG files found in ${LAMINAS_DIR}`);
