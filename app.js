@@ -18,6 +18,7 @@ const BG_COLORS = [
   '#1a4a1a', '#2a1a4a', '#3a1b1a', '#1a3b2a', '#2a4a1a', '#1a2a3a',
 ];
 const SECRET_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const FETCH_PAGE_SIZE = 1000;
 
 const UI_PREFS_KEY = 'colegium_album_ui_v1';
 const AUTH_SESSION_KEY = 'colegium_album_auth_v1';
@@ -306,12 +307,25 @@ function buildFallbackData() {
 }
 
 async function fetchTable(table, orderColumn = 'id', ascending = true, columns = '*') {
-  const { data, error } = await supabaseClient
-    .from(table)
-    .select(columns)
-    .order(orderColumn, { ascending });
-  if (error) throw error;
-  return data || [];
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select(columns)
+      .order(orderColumn, { ascending })
+      .range(from, from + FETCH_PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+
+    if (page.length < FETCH_PAGE_SIZE) break;
+    from += FETCH_PAGE_SIZE;
+  }
+
+  return rows;
 }
 
 async function fetchUserFiguritasRows(userId) {
