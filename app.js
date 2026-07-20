@@ -898,10 +898,9 @@ function updateBadges() {
 
 function updateNavActive() {
   const btns = document.querySelectorAll('.nav-btn');
-  const map = ['mi-album', 'todos', 'intercambios', 'mensajes', 'ranking'];
   btns.forEach(btn => btn.classList.remove('active'));
-  const idx = map.indexOf(currentView);
-  if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
+  const activeBtn = document.querySelector(`.nav-btn[data-view="${currentView}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
 }
 
 function bindNavButtons() {
@@ -1165,7 +1164,7 @@ function renderCurrentView() {
     showAuthScreen();
     return;
   }
-  if (currentView === 'codigos' && !codesAccessGranted) {
+  if (currentView === 'intercambios' || (currentView === 'codigos' && !codesAccessGranted)) {
     currentView = 'mi-album';
     saveUiPrefs();
   }
@@ -1218,6 +1217,9 @@ function switchView(viewName) {
   if (!currentUserId) {
     showAuthScreen();
     return;
+  }
+  if (viewName === 'intercambios') {
+    viewName = 'mi-album';
   }
   if (viewName === 'codigos' && !codesAccessGranted) {
     openCodesAccessModal();
