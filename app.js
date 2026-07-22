@@ -1310,41 +1310,26 @@ function renderStickerGrid(containerId, filter, userId) {
     return;
   }
 
-  container.innerHTML = filtered.map(sticker => stickerHTML(sticker, owned[sticker.id] || 0, userId)).join('');
+  container.innerHTML = filtered.map(sticker => stickerHTML(sticker, owned[sticker.id] || 0)).join('');
 }
 
-function stickerHTML(sticker, qty, userId) {
-  const pendingValidation = userId ? getPendingValidation(userId, sticker.id) : null;
-  const isPending = Boolean(pendingValidation);
-  const stateClass = isPending
-    ? 'pending'
-    : qty === 0
-      ? 'missing'
-      : qty === 1
-        ? 'owned'
-        : 'duplicate owned';
-  const badgeHTML = isPending
-    ? '<div class="sticker-badge pending-badge">Pendiente</div>'
-    : qty === 0
-      ? '<div class="sticker-badge missing-badge">Falta</div>'
-      : qty === 1
-        ? '<div class="sticker-badge">✓</div>'
-        : `<div class="sticker-badge dup">x${qty}</div>`;
+function stickerHTML(sticker, qty) {
+  const stateClass = qty === 0
+    ? 'missing'
+    : qty === 1
+      ? 'owned'
+      : 'duplicate owned';
+  const badgeHTML = qty === 0
+    ? '<div class="sticker-badge missing-badge">Falta</div>'
+    : qty === 1
+      ? '<div class="sticker-badge">✓</div>'
+      : `<div class="sticker-badge dup">x${qty}</div>`;
   const bg = BG_COLORS[(sticker.id - 1) % BG_COLORS.length];
   const imagePath = resolveStickerImagePath(sticker);
-  const imageHTML = isPending
-    ? imagePath
-      ? `
-        <img class="sticker-image sticker-image-pending" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">
-        <div class="sticker-pending-overlay">Pendiente de validaci&oacute;n</div>
-      `
-      : `<div class="sticker-pending" style="background:${bg}; color:rgba(255,255,255,0.95);">Pendiente de validaci&oacute;n</div>`
-    : imagePath && qty > 0
+  const imageHTML = imagePath && qty > 0
       ? `<img class="sticker-image" src="${escapeAttr(imagePath)}" alt="${escapeAttr(sticker.name)}">`
       : `<div class="sticker-avatar" style="background:${bg}; color:rgba(255,255,255,0.9);">${escapeHtml(sticker.initials)}</div>`;
-  const title = isPending
-    ? 'Pendiente de validación'
-    : 'Click para activar con código secreto';
+  const title = 'Click para activar con código secreto';
 
   return `
     <div class="sticker-card ${stateClass}" onclick="toggleOwn(${sticker.id})" title="${escapeAttr(title)}">
@@ -1361,11 +1346,6 @@ function stickerHTML(sticker, qty, userId) {
 }
 
 function toggleOwn(stickerId) {
-  const pendingValidation = currentUserId ? getPendingValidation(currentUserId, stickerId) : null;
-  if (pendingValidation) {
-    showToast('Pendiente de validación');
-    return;
-  }
   openStickerCodeModal(stickerId);
 }
 
@@ -1393,7 +1373,7 @@ function openStickerCodeModal(stickerId) {
       <div class="code-target-emoji" style="background:${bg}; color:rgba(255,255,255,0.95);">${escapeHtml(sticker?.initials || '🔒')}</div>
       <div class="code-target-info">
         <div class="code-target-name">#${String(stickerId).padStart(2, '0')} ${escapeHtml(sticker?.name || 'Figurita')}</div>
-        <div class="code-target-meta">Quedará pendiente de validación</div>
+        <div class="code-target-meta">Se agregará directamente a tu álbum</div>
       </div>
     `;
   }
@@ -1415,7 +1395,7 @@ function closeStickerCodeModal() {
   if (modal) modal.classList.remove('open');
 }
 
-function demoActivateStickerWithCode(userId, stickerId, code, maxRequests) {
+function demoActivateStickerWithCode(userId, stickerId, code) {
   const sticker = getStickerById(stickerId);
   if (!sticker) {
     throw new Error('figurita no encontrada');
@@ -1425,33 +1405,10 @@ function demoActivateStickerWithCode(userId, stickerId, code, maxRequests) {
     throw new Error('codigo incorrecto');
   }
 
-  const existingPending = getPendingValidation(userId, stickerId);
-  if (existingPending) {
-    throw new Error('ya pendiente');
-  }
-
-  if (!Number.isFinite(Number(maxRequests)) || Number(maxRequests) <= 0) {
-    throw new Error('sin cupo en hoja');
-  }
-
-  if (getLocalStickerRequestCount(userId, stickerId) >= Number(maxRequests)) {
-    throw new Error('sin cupo en hoja');
-  }
-
-  incrementLocalStickerRequestCount(userId, stickerId);
-
-  const validation = {
-    id: Date.now(),
-    user_id: Number(userId),
-    figurita_id: Number(stickerId),
-    status: 'pending',
-    created_at: new Date().toISOString(),
-    responded_at: null,
-    responded_by_user_id: null,
-  };
-  APP.validacionesSecretas.unshift(validation);
-
-  return 'pending';
+  setLocalStickerQty(userId, stickerId, getLocalQty(userId, stickerId) + 1);
+  const rawSticker = APP.figuritas.find(item => Number(item.id) === Number(stickerId));
+  if (rawSticker) rawSticker.foto_path = resolveStickerImagePath(sticker || rawSticker);
+  return 'accepted';
 }
 
 async function submitStickerCode() {
@@ -1473,18 +1430,11 @@ async function submitStickerCode() {
   }
 
   try {
-    const maxRequests = await getValidationSheetAllowance(currentUserId, pendingStickerId);
-    if (getLocalStickerRequestCount(currentUserId, pendingStickerId) >= maxRequests) {
-      setStickerCodeError('No hay más cupo para esta figurita según la hoja.');
-      return;
-    }
-
     if (usingRemoteDb()) {
       const { error } = await supabaseClient.rpc('activar_figurita_con_codigo', {
         p_user_id: currentUserId,
         p_figurita_id: pendingStickerId,
         p_codigo: code,
-        p_max_veces_pedidas: maxRequests,
       });
       if (error) throw error;
       secretCodesRows = [];
@@ -1492,7 +1442,7 @@ async function submitStickerCode() {
       pendingValidationLoaded = false;
       await reloadFromSource();
     } else {
-      demoActivateStickerWithCode(currentUserId, pendingStickerId, code, maxRequests);
+      demoActivateStickerWithCode(currentUserId, pendingStickerId, code);
       secretCodesRows = [];
       secretCodesLoaded = false;
       pendingValidationLoaded = false;
@@ -1500,22 +1450,16 @@ async function submitStickerCode() {
       renderAll();
     }
     closeStickerCodeModal();
-    showToast('✅ Solicitud enviada a validación');
+    showToast('✅ Figurita agregada al álbum');
   } catch (error) {
     console.error(error);
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('codigo incorrecto')) {
       setStickerCodeError('Código incorrecto.');
-    } else if (msg.includes('ya pendiente')) {
-      setStickerCodeError('Ya hay una solicitud pendiente para esa figurita.');
-    } else if (msg.includes('sin cupo') || msg.includes('cupo no informado')) {
-      setStickerCodeError('No hay más cupo para esta figurita según la hoja.');
     } else if (msg.includes('figurita no encontrada')) {
       setStickerCodeError('Figurita no encontrada.');
-    } else if (msg.includes('hoja') || msg.includes('sheet')) {
-      setStickerCodeError('No se pudo validar la hoja de repartidos.');
     } else {
-      setStickerCodeError('No se pudo enviar la solicitud.');
+      setStickerCodeError('No se pudo activar la figurita.');
     }
   }
 }

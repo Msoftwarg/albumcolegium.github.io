@@ -306,8 +306,7 @@ set search_path = public
 as $$
 declare
   v_secret text;
-  v_has_pending boolean;
-  v_veces_pedidas integer;
+  v_lamina_path text;
 begin
   select f.secret_code
   into v_secret
@@ -323,58 +322,26 @@ begin
     raise exception 'codigo incorrecto';
   end if;
 
-  select exists(
-    select 1
-    from public.validaciones_secretas
-    where user_id = p_user_id
-      and figurita_id = p_figurita_id
-      and status = 'pending'
-  )
-  into v_has_pending;
+  select coalesce(u.lamina_path, '')
+  into v_lamina_path
+  from public.figuritas f
+  join public.usuarios u on u.id = f.user_id
+  where f.id = p_figurita_id;
 
-  if v_has_pending then
-    raise exception 'ya pendiente';
+  if coalesce(v_lamina_path, '') <> '' then
+    update public.figuritas
+    set foto_path = coalesce(nullif(foto_path, ''), public.strip_diacritics(v_lamina_path))
+    where id = p_figurita_id;
   end if;
 
-  if coalesce(p_max_veces_pedidas, 0) <= 0 then
-    raise exception 'sin cupo en hoja';
-  end if;
+  insert into public.usuario_figuritas as uf (user_id, figurita_id, cantidad, created_at)
+  values (p_user_id, p_figurita_id, 1, now())
+  on conflict (user_id, figurita_id)
+  do update set
+    cantidad = uf.cantidad + excluded.cantidad,
+    created_at = now();
 
-  insert into public.usuario_figuritas (user_id, figurita_id, cantidad, veces_pedidas, created_at)
-  values (p_user_id, p_figurita_id, 0, 0, now())
-  on conflict (user_id, figurita_id) do nothing;
-
-  select veces_pedidas
-  into v_veces_pedidas
-  from public.usuario_figuritas
-  where user_id = p_user_id
-    and figurita_id = p_figurita_id
-  for update;
-
-  if coalesce(v_veces_pedidas, 0) >= p_max_veces_pedidas then
-    raise exception 'sin cupo en hoja';
-  end if;
-
-  insert into public.validaciones_secretas (
-    user_id,
-    figurita_id,
-    status,
-    created_at
-  )
-  values (
-    p_user_id,
-    p_figurita_id,
-    'pending',
-    now()
-  );
-
-  update public.usuario_figuritas
-  set veces_pedidas = veces_pedidas + 1,
-      created_at = now()
-  where user_id = p_user_id
-    and figurita_id = p_figurita_id;
-
-  return 'pending';
+  return 'accepted';
 end;
 $$;
 
